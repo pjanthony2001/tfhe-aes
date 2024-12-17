@@ -9,19 +9,24 @@ fn print_type<T>(_: &T) {
 }
 
 
-fn sub_word(word: &FheUint32, s_box: &MatchValues<u32>) -> FheUint32 {
+fn sub_word(word: &FheUint32, s_box: &MatchValues<u8>) -> FheUint32 {
     // clone 4 times and AND each time.
-    let byte1: FheUint32 = word.clone() & 0x000000FF;
-    let byte2: FheUint32 = (word.clone() >> 8 as u8) & 0x000000FF;
-    let byte3: FheUint32 = (word.clone() >> 16 as u8) & 0x000000FF;
-    let byte4: FheUint32 = (word.clone() >> 24 as u8) & 0x000000FF;
+    let byte1: FheUint8 = (word.clone() & 0x000000FF).cast_into();
+    let byte2: FheUint8 = ((word.clone() >> 8 as u8) & 0x000000FF).cast_into();
+    let byte3: FheUint8 = ((word.clone() >> 16 as u8) & 0x000000FF).cast_into();
+    let byte4: FheUint8 = ((word.clone() >> 24 as u8) & 0x000000FF).cast_into();
 
-    let (sub_byte1, _): (FheUint32, _) = byte1.match_value(s_box).unwrap();
-    let (sub_byte2, _): (FheUint32, _)  = byte2.match_value(s_box).unwrap(); // cast into !
-    let (sub_byte3, _): (FheUint32, _)  = byte3.match_value(s_box).unwrap();
-    let (sub_byte4, _): (FheUint32, _)  = byte4.match_value(s_box).unwrap();
+    let (sub_byte1, _): (FheUint8, _) = byte1.match_value(s_box).unwrap();
+    let (sub_byte2, _): (FheUint8, _)  = byte2.match_value(s_box).unwrap(); // cast into !
+    let (sub_byte3, _): (FheUint8, _)  = byte3.match_value(s_box).unwrap();
+    let (sub_byte4, _): (FheUint8, _)  = byte4.match_value(s_box).unwrap();
 
-    sub_byte1 | (sub_byte2 << 8 as u8) | (sub_byte3 << 16 as u8) | (sub_byte4 << 24 as u8)
+    let sub_byte1_32: FheUint32 = sub_byte1.cast_into();
+    let sub_byte2_32: FheUint32 = sub_byte2.cast_into();
+    let sub_byte3_32: FheUint32 = sub_byte3.cast_into();
+    let sub_byte4_32: FheUint32 = sub_byte4.cast_into();
+
+    (((((sub_byte4_32 << 8 as u8) | sub_byte3_32) << 8 as u8) | sub_byte2_32) << 8 as u8) | sub_byte1_32
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,8 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     // Create a vector of (key, value) pairs
-    let vec: Vec<(u32, u32)> = (0..=255)
-        .map(|key| (key as u32, s_box_data[key as usize] as u32))
+    let vec: Vec<(_, _)> = (0..=255)
+        .map(|key| (key as u8, s_box_data[key as usize]))
         .collect();
 
     let start_match = Instant::now();
