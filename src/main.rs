@@ -8,13 +8,17 @@ fn print_type<T>(_: &T) {
     println!("{:?}", std::any::type_name::<T>());
 }
 
+fn rot_word(word: &FheUint32) -> FheUint32 {
+    word.rotate_left(8 as u8)
+}
+
 
 fn sub_word(word: &FheUint32, s_box: &MatchValues<u8>) -> FheUint32 {
-    // clone 4 times and AND each time.
-    let byte1: FheUint8 = (word.clone() & 0x000000FF).cast_into();
-    let byte2: FheUint8 = ((word.clone() >> 8 as u8) & 0x000000FF).cast_into();
-    let byte3: FheUint8 = ((word.clone() >> 16 as u8) & 0x000000FF).cast_into();
-    let byte4: FheUint8 = ((word.clone() >> 24 as u8) & 0x000000FF).cast_into();
+    
+    let byte1: FheUint8 = (word & 0x000000FF).cast_into();
+    let byte2: FheUint8 = ((word >> 8 as u8) & 0x000000FF).cast_into();
+    let byte3: FheUint8 = ((word >> 16 as u8) & 0x000000FF).cast_into();
+    let byte4: FheUint8 = ((word >> 24 as u8) & 0x000000FF).cast_into();
 
     let (sub_byte1, _): (FheUint8, _) = byte1.match_value(s_box).unwrap();
     let (sub_byte2, _): (FheUint8, _)  = byte2.match_value(s_box).unwrap(); // cast into !
@@ -29,6 +33,25 @@ fn sub_word(word: &FheUint32, s_box: &MatchValues<u8>) -> FheUint32 {
     (((((sub_byte4_32 << 8 as u8) | sub_byte3_32) << 8 as u8) | sub_byte2_32) << 8 as u8) | sub_byte1_32
 }
 
+fn rotate_left_sub_word(word: &FheUint32, s_box: &MatchValues<u8>) -> FheUint32 {
+    let byte1: FheUint8 = ((word >> 24 as u8) & 0x000000FF).cast_into();
+    let byte2: FheUint8 = (word & 0x000000FF).cast_into();
+    let byte3: FheUint8 = ((word >> 8 as u8) & 0x000000FF).cast_into();
+    let byte4: FheUint8 = ((word >> 16 as u8) & 0x000000FF).cast_into();
+
+    let (sub_byte1, _): (FheUint8, _) = byte1.match_value(s_box).unwrap();
+    let (sub_byte2, _): (FheUint8, _)  = byte2.match_value(s_box).unwrap(); // cast into !
+    let (sub_byte3, _): (FheUint8, _)  = byte3.match_value(s_box).unwrap();
+    let (sub_byte4, _): (FheUint8, _)  = byte4.match_value(s_box).unwrap();
+
+    let sub_byte1_32: FheUint32 = sub_byte1.cast_into();
+    let sub_byte2_32: FheUint32 = sub_byte2.cast_into();
+    let sub_byte3_32: FheUint32 = sub_byte3.cast_into();
+    let sub_byte4_32: FheUint32 = sub_byte4.cast_into();
+
+    (((((sub_byte4_32 << 8 as u8) | sub_byte3_32) << 8 as u8) | sub_byte2_32) << 8 as u8) | sub_byte1_32
+
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (client_key, server_key) = generate_keys(ConfigBuilder::default());
     set_server_key(server_key);
@@ -67,13 +90,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let start_sub = Instant::now();
     let subbed_word = sub_word(&word, &s_box);
+    let rotated_word = rot_word(&word);
     let duraction_sub = start_sub.elapsed();
 
     println!("MATCHED TIME: {:?}", duration_match);
     println!("SUBWORD TIME: {:?}", duraction_sub);
-
+    
+    let encrypted: u32 = word.decrypt(&client_key);
     let decrypted: u32 = subbed_word.decrypt(&client_key);
-    println!("{:#x}", decrypted);
+    let rotated: u32 = rotated_word.decrypt(&client_key);
+    println!("ENCRYPTED: {:#x},  SUBBED: {:#x}", encrypted, decrypted);
+    println!("ENCRYPTED: {:#x},  ROTATED: {:#x}", encrypted, rotated);
 
     Ok(())
 }

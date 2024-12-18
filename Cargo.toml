@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tfhe = { git = "https://github.com/zama-ai/tfhe-rs.git", rev = "38a7e4f", features = ["boolean", "shortint", "integer", "x86_64"]}
+tfhe = { git = "https://github.com/zama-ai/tfhe-rs.git", rev = "4e2db92", features = ["integer", "nightly-avx512", "noise-asserts"]}
 aes = "0.8.0"
 
-
+[profile.release]
+debug = true
