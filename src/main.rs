@@ -14,21 +14,35 @@ fn rot_word(word: &FheUint32) -> FheUint32 {
 
 
 fn sub_word(word: &FheUint32, s_box: &MatchValues<u8>) -> FheUint32 {
+
+    let start_shift_cast = Instant::now();
     
     let byte1: FheUint8 = (word & 0x000000FF).cast_into();
     let byte2: FheUint8 = ((word >> 8 as u8) & 0x000000FF).cast_into();
     let byte3: FheUint8 = ((word >> 16 as u8) & 0x000000FF).cast_into();
     let byte4: FheUint8 = ((word >> 24 as u8) & 0x000000FF).cast_into();
 
+    let duration_shift_cast = start_shift_cast.elapsed();
+    let start_match = Instant::now();
+
     let (sub_byte1, _): (FheUint8, _) = byte1.match_value(s_box).unwrap();
     let (sub_byte2, _): (FheUint8, _)  = byte2.match_value(s_box).unwrap(); // cast into !
     let (sub_byte3, _): (FheUint8, _)  = byte3.match_value(s_box).unwrap();
     let (sub_byte4, _): (FheUint8, _)  = byte4.match_value(s_box).unwrap();
+    
+    let duration_match = start_match.elapsed();
+    let start_cast = Instant::now();
 
     let sub_byte1_32: FheUint32 = sub_byte1.cast_into();
     let sub_byte2_32: FheUint32 = sub_byte2.cast_into();
     let sub_byte3_32: FheUint32 = sub_byte3.cast_into();
     let sub_byte4_32: FheUint32 = sub_byte4.cast_into();
+
+    let duration_cast = start_cast.elapsed();
+
+    println!("SHIFT CAST {:?}", duration_shift_cast);
+    println!("MATCH {:?}", duration_match);
+    println!("CAST {:?}", duration_cast);
 
     (((((sub_byte4_32 << 8 as u8) | sub_byte3_32) << 8 as u8) | sub_byte2_32) << 8 as u8) | sub_byte1_32
 }
