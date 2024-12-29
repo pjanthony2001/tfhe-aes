@@ -1,0 +1,13 @@
+[package]
+name = "base"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rayon = "1.0.0"
+tfhe = { git = "https://github.com/zama-ai/tfhe-rs.git", rev = "4e2db92", features = ["integer", "nightly-avx512", "noise-asserts", "boolean"]}
+rand = "0.8.0"
+itertools = "0.13.0"
+strum = "0.24"
+strum_macros = "0.24"
+

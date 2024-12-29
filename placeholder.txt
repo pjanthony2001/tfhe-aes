@@ -1,0 +1,283 @@
+This is a place holder for general stuff that is to be implemented
+
+
+////////// MIXCOLS ///////////
+use rayon::prelude::*;  // Import rayon parallel iterators
+
+The result x • b(x) is obtained by reducing the above result modulo m(x), as defined in equation 
+(4.1). If b7 = 0, the result is already in reduced form. If b7 = 1, the reduction is accomplished by 
+subtracting (i.e., XORing) the polynomial m(x). It follows that multiplication by x (i.e., 
+{00000010} or {02}) can be implemented at the byte level as a left shift and a subsequent 
+conditional bitwise XOR with {1b}. This operation on bytes is denoted by xtime(). 
+Multiplication by higher powers of x can be implemented by repeated application of xtime(). 
+By adding intermediate results, multiplication by any constant can be implemented.
+
+
+fn main() {
+    let input: [u8; 16] = [
+        0x57, 0x83, 0x1F, 0xC6, 0x32, 0x99, 0x6A, 0xAF, 
+        0xDD, 0xD5, 0x44, 0x73, 0x82, 0xA7, 0x5F, 0x9A
+    ]; // Example 16 bytes of data
+
+    // Apply the multiplication by 02 in parallel to each byte
+    let result: Vec<u8> = input.par_iter().map(|&x| gf_mul_by_2(x)).collect();
+
+    // Print the result
+    for byte in result {
+        println!("0x{:02X}", byte);
+    }
+}
+
+//// use scope to do multipl parallel at once and collect to different vectors
+use rayon::scope;
+
+fn main() {
+    let input: Vec<i32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    
+    scope(|s| {
+        s.spawn(|_| {
+            input.par_iter().map(|&x| process1(x)).collect::<Vec<_>>();
+        });
+        
+        s.spawn(|_| {
+            input.par_iter().map(|&x| process2(x)).collect::<Vec<_>>();
+        });
+    });
+}
+
+
+
+/// EXTD EUCLIDEAN ALGO
+
+function inverse(a, p)
+    t := 0;     newt := 1
+    r := p;     newr := a
+
+    while newr ≠ 0 do
+        quotient := r div newr
+        (r, newr) := (newr, r − quotient × newr)
+        (t, newt) := (newt, t − quotient × newt)
+
+    if degree(r) > 0 then 
+        return "Either p is not irreducible or a is a multiple of p"
+
+    return t
+
+/// 
+
+
+
+/// Check chatgpt gives garbage a lot of the time
+
+def poly_degree(a):
+    """Return the degree of the polynomial represented by integer a."""
+    degree = -1
+    while a > 0:
+        a >>= 1
+        degree += 1
+    return degree
+
+def poly_divmod(a, b):
+    """Divide polynomial a by polynomial b, return the quotient and remainder."""
+    q = 0
+    while poly_degree(a) >= poly_degree(b):
+        shift = poly_degree(a) - poly_degree(b)
+        q ^= (1 << shift)
+        a ^= (b << shift)
+    return q, a
+
+
+///
+
+
+// mul_poly
+
+a: 8bit = ...
+b: 16bit = ... .cast_into(16 bit)
+
+
+
+///////// MATCH REPLACEMENT
+ x match (key, value)
+
+ compute ((x xor key) == 0, value) 53ms in 256 parallel threads
+
+ divide and conquer the select() 30ms in 128 parallel threads, 64, 32, .. 1 => 240ms
+
+ overall time should be 300ms, with overhead should be 1s should be possible.
+
+pub struct LookupTable {
+    server_key: ServerKey,
+    key_values: Vec<(u8, FheUint8)>,
+}
+
+impl LookupTable {
+    pub fn new(key_values: Vec<(u8, FheUint8)>, server_key: ServerKey) -> Self {
+        Self {
+            server_key,
+            key_values,
+        }
+    }
+
+    pub fn lookup(&self, x: &FheUint8) -> FheUint8 {
+        let num_threads = rayon::current_num_threads();
+        let chunk_size = 1;
+
+        // scope(|s| {
+        //     let start_clone = Instant::now();
+        //
+        //     let thread_server_key = Arc::new(Mutex::new(self.server_key.clone()));
+        //
+        //     self.key_values
+        //         .chunks(chunk_size)
+        //         .map(|chunk| {
+        //             let server_key_clone = Arc::clone(&thread_server_key);
+        //             let tx_clone = tx.clone();
+        //             (chunk, server_key_clone, tx_clone)
+        //         })
+        //         .for_each(|(chunk, server_key_clone, tx_clone)| {
+        //             s.spawn(move |_| {
+        //                 {
+        //                     let locked_key = server_key_clone.lock().unwrap();
+        //                     set_server_key(locked_key.clone());
+        //                 }
+        //
+        //                 let result: Vec<_> = chunk
+        //                     .into_iter()
+        //                     .map(|y| Self::check_eq(x, y))
+        //                     .collect();
+        //                 tx_clone.send(result);
+        //                 println!("KEL");
+        //             });
+        //         });
+        //
+        //     println!("SPAWN {:?}", start_clone.elapsed());
+        // });
+
+        let key_vals = self.key_values.clone();
+        let server_key_clone = self.server_key.clone();
+
+        let start_set_up = Instant::now();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .start_handler(move |_| set_server_key(server_key_clone.clone()))
+            .build()
+            .unwrap();
+
+        println!("THREAD SETUP: {:?}", start_set_up.elapsed());
+
+        let start_threading_1 = Instant::now();
+        let results: Vec<_> = pool.install(|| 
+            key_vals
+                .par_chunks(2)
+                .map(|y| Self::collapse(&Self::check_eq(x, &y[0]), &Self::check_eq(x, &y[1])))
+                .collect()
+        );
+        println!("THREADING PART 1: {:?}", start_threading_1.elapsed());
+        let start_threading_2 = Instant::now();
+
+        // let results: Vec<_> = pool.install(move || 
+        //         inter_results
+        //         .par_chunks(2)
+        //         .map(|val| Self::collapse(&val[0], &val[1]))
+        //         .collect()
+        // );
+
+        println!("THREADING PART 2 {:?}", start_threading_2.elapsed());
+
+        let bool_value_0 = &results[0];
+        let bool_value_1 = &results[1];
+
+        x.clone()
+    }
+
+    fn check_eq(x: &FheUint8, key_value: &(u8, FheUint8)) -> (FheBool, FheUint8) {
+        (x.eq(key_value.0), key_value.1.clone())
+    }
+
+    fn collapse(
+        bool_value_0: &(FheBool, FheUint8),
+        bool_value_1: &(FheBool, FheUint8),
+    ) -> (FheBool, FheUint8) {
+        // Takes about 100ms
+        let next_bool = || bool_value_0.0.select(&bool_value_0.0, &bool_value_1.0);
+        let next_value = || bool_value_0.0.select(&bool_value_0.1, &bool_value_1.1);
+        rayon::join(next_bool, next_value)
+    }
+
+
+    // fn lookup(&self, x: &FheUint8) -> (FheBool, FheUint8) {
+    //     // First, let's optimize the check_eq operations using block cipher
+    //     let cipher = self.server_key.create_parallel_block_cipher(BlockCipherMode::Optimized);
+    //     
+    //     // Process all comparisons in parallel using batched operations
+    //     let comparisons: Vec<(FheBool, FheUint8)> = {
+    //         // Extract all the plaintext values we need to compare against
+    //         let plain_values: Vec<u8> = self.key_values.iter()
+    //             .map(|(val, _)| *val)
+    //             .collect();
+    //             
+    //         // Perform batched equality comparison
+    //         let bool_results = cipher.par_equals_parallelized(x, &plain_values);
+    //         
+    //         // Zip results with the corresponding FheUint8 values
+    //         bool_results.into_iter()
+    //             .zip(self.key_values.iter())
+    //             .map(|(bool_result, (_, uint_val))| 
+    //                 (bool_result, uint_val.clone())
+    //             )
+    //             .collect()
+    //     };
+    //
+    //     // Now handle the tree-like collapse operations
+    //     self.collapse_tree(comparisons)
+    // }
+
+//     fn collapse_tree(&self, mut level: Vec<(FheBool, FheUint8)>) -> (FheBool, FheUint8) {
+//     // Create our block cipher for optimized parallel operations
+//     let cipher = self.server_key;    
+//     // We know exactly how many levels we'll process: log2(256) = 8 levels
+//     // Level sizes will be: 128, 64, 32, 16, 8, 4, 2, 1
+//     for level_size in [128, 64, 32, 16, 8, 4, 2] {
+//         // Process the entire level in one batch
+//         let conditions: Vec<&FheBool> = level[..level_size*2]
+//             .chunks(2)
+//             .map(|chunk| &chunk[0].0)
+//             .collect();
+//
+//         let true_vals: Vec<&FheUint8> = level[..level_size*2]
+//             .chunks(2)
+//             .map(|chunk| &chunk[0].1)
+//             .collect();
+//         
+//         let false_vals: Vec<&FheUint8> = level[..level_size*2]
+//             .chunks(2)
+//             .map(|chunk| &chunk[1].1)
+//             .collect();
+//
+//         // Use block cipher for both boolean and integer selections in parallel
+//         let next_vals = cipher.par_select_by_bool_parallelized(
+//             &conditions,
+//             &true_vals,
+//             &false_vals
+//         );
+//
+//         let next_bools = cipher.par_select_by_bool_parallelized(
+//             &conditions,
+//             &conditions,  // If condition is true, keep the first boolean
+//             &level[..level_size*2]
+//                 .chunks(2)
+//                 .map(|chunk| &chunk[1].0)
+//                 .collect::<Vec<_>>()  // If false, use the second boolean
+//         );
+//
+//         // Prepare the next level
+//         level = next_bools.into_iter()
+//             .zip(next_vals)
+//             .map(|(bool_val, val)| (bool_val, val))
+//             .collect();
+//     }
+//
+//     // After all levels are processed, we have our final result
+//     level[0].clone()
+// }
+}
