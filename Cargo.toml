@@ -1,5 +1,5 @@
 [workspace]
-members = [ "base", "decrypt", "encrypt","tfhe-aes"]
+members = [ "base", "ecb","tfhe-aes"]
 resolver = "2"
 
 [profile.release]
