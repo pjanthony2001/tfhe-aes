@@ -1,10 +1,13 @@
 use ::std::rc::Rc;
+use dashmap::DashMap;
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::ops::Not;
+use std::sync::Arc;
 use tfhe::boolean::prelude::*;
 
-#[derive(Debug, PartialEq, Copy, Clone)]
-enum Operand {
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum Operand {
     True,
     False,
     Bit0,
@@ -91,7 +94,7 @@ impl Operand {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BooleanExpr {
     Operand(Operand),
     And(Box<BooleanExpr>, Box<BooleanExpr>),
@@ -108,41 +111,6 @@ impl BooleanExpr {
     ) -> bool {
         (inner_0 == other_inner_0 && inner_1 == other_inner_1)
             || (inner_0 == other_inner_1 && inner_1 == other_inner_0)
-    }
-}
-
-impl PartialEq for BooleanExpr {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            BooleanExpr::Operand(inner) => match other {
-                BooleanExpr::Operand(other_inner) => inner == other_inner,
-                _ => false,
-            },
-            BooleanExpr::And(inner_0, inner_1) => match other {
-                BooleanExpr::And(other_inner_0, other_inner_1) => {
-                    Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
-                }
-                _ => false,
-            },
-            BooleanExpr::Or(inner_0, inner_1) => match other {
-                BooleanExpr::And(other_inner_0, other_inner_1) => {
-                    Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
-                }
-                _ => false,
-            },
-            BooleanExpr::Xor(inner_0, inner_1) => match other {
-                BooleanExpr::And(other_inner_0, other_inner_1) => {
-                    Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
-                }
-                _ => false,
-            },
-            BooleanExpr::Mux(mux, inner_0, inner_1) => match other {
-                BooleanExpr::Mux(other_mux, other_inner_0, other_inner_1) => {
-                    mux == other_mux && inner_0 == other_inner_0 && inner_1 == other_inner_1
-                }
-                _ => false,
-            },
-        }
     }
 }
 
@@ -252,24 +220,21 @@ impl BooleanExpr {
         result[0].clone()
     }
 
-    fn evaluate(
+    pub fn evaluate(
         &self,
         bits: &[Ciphertext],
         true_enc: &Ciphertext,
         server_key: &ServerKey,
-        visited: Rc<RefCell<Vec<Box<(BooleanExpr, Ciphertext)>>>>,
+        visited: Arc<DashMap<BooleanExpr, Ciphertext>>,
     ) -> Ciphertext {
         assert!(bits.len() == 8, "BITS LENGTH IS INCORRECT");
 
-        let visited_binding = visited.borrow();
-
-        let search = visited_binding.iter().find(|x| *self == (*x).0);
-
-        if let Some(boxed_cipher) = search {
-            return (**boxed_cipher).1.clone();
+        if visited.contains_key(self) {
+            return visited
+                .get(self)
+                .expect("The DashMap should contain the current Expr")
+                .clone();
         }
-
-        std::mem::drop(visited_binding);
 
         let evaluated_expr = match self {
             BooleanExpr::Operand(op) => op.evaluate(bits, true_enc, server_key),
@@ -292,8 +257,7 @@ impl BooleanExpr {
             ),
         };
 
-        let mut visited_binding = visited.borrow_mut();
-        visited_binding.push(Box::new((self.clone(), evaluated_expr.clone())));
+        visited.insert(self.clone(), evaluated_expr.clone());
         evaluated_expr
     }
 
@@ -307,9 +271,140 @@ impl From<bool> for BooleanExpr {
         BooleanExpr::Operand(value.into())
     }
 }
+use std::cmp::Ordering;
+
+// impl PartialEq for BooleanExpr {
+//     fn eq(&self, other: &Self) -> bool {
+//         match self {
+//             BooleanExpr::Operand(inner) => match other {
+//                 BooleanExpr::Operand(other_inner) => inner == other_inner,
+//                 _ => false,
+//             },
+//             BooleanExpr::And(inner_0, inner_1) => match other {
+//                 BooleanExpr::And(other_inner_0, other_inner_1) => {
+//                     Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
+//                 }
+//                 _ => false,
+//             },
+//             BooleanExpr::Or(inner_0, inner_1) => match other {
+//                 BooleanExpr::And(other_inner_0, other_inner_1) => {
+//                     Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
+//                 }
+//                 _ => false,
+//             },
+//             BooleanExpr::Xor(inner_0, inner_1) => match other {
+//                 BooleanExpr::And(other_inner_0, other_inner_1) => {
+//                     Self::eq_commutative(&inner_0, &inner_1, &other_inner_0, &other_inner_1)
+//                 }
+//                 _ => false,
+//             },
+//             BooleanExpr::Mux(mux, inner_0, inner_1) => match other {
+//                 BooleanExpr::Mux(other_mux, other_inner_0, other_inner_1) => {
+//                     mux == other_mux && inner_0 == other_inner_0 && inner_1 == other_inner_1
+//                 }
+//                 _ => false,
+//             },
+//         }
+//     }
+// }
+impl PartialOrd for Operand {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Operand {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (*self as u8).cmp(&(*other as u8))
+    }
+}
+
+impl BooleanExpr {
+    fn discriminant(&self) -> u8 {
+        match self {
+            BooleanExpr::Operand(_) => 0,
+            BooleanExpr::And(_, _) => 1,
+            BooleanExpr::Or(_, _) => 2,
+            BooleanExpr::Xor(_, _) => 3,
+            BooleanExpr::Mux(_, _, _) => 4,
+        }
+    }
+}
+
+impl PartialOrd for BooleanExpr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BooleanExpr {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Compare discriminants first
+        let self_disc = self.discriminant();
+        let other_disc = other.discriminant();
+        match self_disc.cmp(&other_disc) {
+            Ordering::Equal => {
+                // Compare content based on the type
+                match (self, other) {
+                    (BooleanExpr::Operand(a), BooleanExpr::Operand(b)) => a.cmp(b),
+                    (BooleanExpr::And(lhs1, rhs1), BooleanExpr::And(lhs2, rhs2))
+                    | (BooleanExpr::Or(lhs1, rhs1), BooleanExpr::Or(lhs2, rhs2))
+                    | (BooleanExpr::Xor(lhs1, rhs1), BooleanExpr::Xor(lhs2, rhs2)) => {
+                        lhs1.cmp(lhs2).then_with(|| rhs1.cmp(rhs2))
+                    }
+                    (BooleanExpr::Mux(op1, lhs1, rhs1), BooleanExpr::Mux(op2, lhs2, rhs2)) => op1
+                        .cmp(op2)
+                        .then_with(|| lhs1.cmp(lhs2))
+                        .then_with(|| rhs1.cmp(rhs2)),
+                    _ => Ordering::Equal, // Shouldn't reach here
+                }
+            }
+            other_ordering => other_ordering,
+        }
+    }
+}
+
+impl Hash for Operand {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Use the discriminant of the enum for a basic hash
+        std::mem::discriminant(self).hash(state);
+    }
+}
+
+impl Hash for BooleanExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            BooleanExpr::Operand(op) => {
+                0.hash(state); // Discriminant for Operand
+                op.hash(state);
+            }
+            BooleanExpr::And(lhs, rhs) => {
+                1.hash(state); // Discriminant for And
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            BooleanExpr::Or(lhs, rhs) => {
+                2.hash(state); // Discriminant for Or
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            BooleanExpr::Xor(lhs, rhs) => {
+                3.hash(state); // Discriminant for Xor
+                lhs.hash(state);
+                rhs.hash(state);
+            }
+            BooleanExpr::Mux(op, t_expr, f_expr) => {
+                4.hash(state); // Discriminant for Mux
+                op.hash(state);
+                t_expr.hash(state);
+                f_expr.hash(state);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
 
     use std::time::{Duration, Instant};
 
@@ -317,7 +412,7 @@ mod tests {
     use tfhe::boolean::gen_keys;
     use tfhe::boolean::prelude::*;
 
-    fn bool_to_ciphertext(booleans: &[bool], client_key: &ClientKey) -> Vec<Ciphertext> {
+    pub fn bool_to_ciphertext(booleans: &[bool], client_key: &ClientKey) -> Vec<Ciphertext> {
         booleans.iter().map(|&x| client_key.encrypt(x)).collect()
     }
 
@@ -445,7 +540,7 @@ mod tests {
         let expr = BooleanExpr::from_bool_vec(&vec![true]);
         let result_expr = BooleanExpr::reduce_mux(&expr);
         let enc_result =
-            result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+            result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
         assert_eq!(client_key.decrypt(&enc_result), true);
     }
@@ -462,7 +557,7 @@ mod tests {
         let expr = BooleanExpr::from_bool_vec(&vec![false]);
         let result_expr = BooleanExpr::reduce_mux(&expr);
         let enc_result =
-            result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+            result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
         assert_eq!(client_key.decrypt(&enc_result), false);
     }
@@ -477,7 +572,7 @@ mod tests {
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
             let enc_result =
-                result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+                result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), bool_bits[0]);
         }
     }
@@ -492,7 +587,7 @@ mod tests {
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
             let enc_result =
-                result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+                result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), !bool_bits[0]);
         }
     }
@@ -507,7 +602,7 @@ mod tests {
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
             let enc_result =
-                result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+                result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), true);
         }
     }
@@ -523,7 +618,7 @@ mod tests {
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
             let enc_result =
-                result_expr.evaluate(&bits, &true_enc, &server_key, Rc::new(RefCell::new(vec![])));
+                result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
             let clear_result = clear_mux_eval(&bool_bits, &truth_table);
             assert_eq!(client_key.decrypt(&enc_result), clear_result);
@@ -541,12 +636,8 @@ mod tests {
 
             for bool_bits in generate_bits(8).into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result = result_expr.evaluate(
-                    &bits,
-                    &true_enc,
-                    &server_key,
-                    Rc::new(RefCell::new(vec![])),
-                );
+                let enc_result =
+                    result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -570,12 +661,8 @@ mod tests {
 
             for bool_bits in generate_bits(8).into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result = result_expr.evaluate(
-                    &bits,
-                    &true_enc,
-                    &server_key,
-                    Rc::new(RefCell::new(vec![])),
-                );
+                let enc_result =
+                    result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -602,12 +689,8 @@ mod tests {
 
             for bool_bits in generate_bits(8)[128..].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result = result_expr.evaluate(
-                    &bits,
-                    &true_enc,
-                    &server_key,
-                    Rc::new(RefCell::new(vec![])),
-                );
+                let enc_result =
+                    result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -632,12 +715,8 @@ mod tests {
 
             for bool_bits in generate_bits(8)[..1].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result = result_expr.evaluate(
-                    &bits,
-                    &true_enc,
-                    &server_key,
-                    Rc::new(RefCell::new(vec![])),
-                );
+                let enc_result =
+                    result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -665,12 +744,8 @@ mod tests {
             for bool_bits in generate_bits(8)[0..100].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
                 let start = Instant::now();
-                let enc_result = result_expr.evaluate(
-                    &bits,
-                    &true_enc,
-                    &server_key,
-                    Rc::new(RefCell::new(vec![])),
-                );
+                let enc_result =
+                    result_expr.evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
                 total += start.elapsed();
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);

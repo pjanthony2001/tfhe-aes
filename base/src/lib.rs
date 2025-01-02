@@ -16,9 +16,10 @@ use tfhe::boolean::gen_keys;
 use tfhe::boolean::prelude::*;
 
 mod boolean_tree;
-mod sbox;
-mod tree;
 mod primitive;
+mod sbox;
+mod state;
+mod tree;
 
 #[derive(Clone, Copy, Debug)]
 enum Token {

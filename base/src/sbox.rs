@@ -22,11 +22,12 @@ const S_BOX_DATA: [u8; 256] = [
 fn bit_x_s_box(position: u8) -> Vec<bool> {
     S_BOX_DATA
         .iter()
-        .map(|&x| x & (1 << position) == 1)
+        .rev()
+        .map(|&x| (x & (1 << position)) != 0)
         .collect()
 }
 
-fn generate_bool_expr() -> Vec<BooleanExpr> {
+pub fn generate_reduced_bool_expr() -> Vec<BooleanExpr> {
     (0..8)
         .into_iter()
         .map(|x| bit_x_s_box(x))
@@ -35,5 +36,29 @@ fn generate_bool_expr() -> Vec<BooleanExpr> {
         .collect()
 }
 
+#[cfg(test)]
 
+mod tests {
 
+    use std::{cell::RefCell, rc::Rc, vec};
+
+    use super::*;
+    use crate::boolean_tree::tests::*;
+    use dashmap::DashMap;
+    use std::sync::Arc;
+    use tfhe::boolean::gen_keys;
+
+    #[test]
+    fn test_bit_0() {
+        let x = generate_reduced_bool_expr();
+        let (client_key, server_key) = gen_keys();
+        let true_enc = client_key.encrypt(true);
+        let bool_bits = vec![false, false, false, false, false, false, false, false];
+        let bits = bool_to_ciphertext(&bool_bits, &client_key);
+        let y = x[6].evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
+
+        println!("{:?}", bit_x_s_box(2));
+
+        assert_eq!(client_key.decrypt(&y), true)
+    }
+}
