@@ -62,7 +62,7 @@ pub fn initialize_thread_pool() {
 }
 
 #[inline(always)]
-fn with_thread_pool<F>(func: F)
+pub fn with_thread_pool<F>(func: F)
 where
     F: FnOnce(&ThreadPool) + std::marker::Send,
 {
