@@ -11,4 +11,5 @@ itertools = "0.13.0"
 strum = "0.24"
 strum_macros = "0.24"
 dashmap = "6.0.0"
+num_cpus = "1.16.0"
 

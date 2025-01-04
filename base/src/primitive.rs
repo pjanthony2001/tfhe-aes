@@ -1,3 +1,5 @@
+
+
 use crate::boolean_tree::Operand;
 use dashmap::DashMap;
 use rayon::prelude::*;
@@ -8,11 +10,18 @@ use std::ops::{BitAnd, BitOr, Not};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use num_cpus;
 use std::collections::VecDeque;
 use tfhe::boolean::prelude::*;
+use tfhe::boolean::server_key::*;
+
+use std::time::Instant;
 
 use crate::boolean_tree::BooleanExpr;
 use crate::sbox::*;
+use rayon::Scope;
+
+
 
 thread_local! {
     static INTERNAL_KEY: RefCell<Option<ServerKey>> = const { RefCell::new(None) };
@@ -31,6 +40,8 @@ pub fn unset_server_key() {
 }
 
 pub fn initialize_thread_pool() {
+    println!("NUM THREADS: {:?}", num_cpus::get());
+
     let parent_server_key = INTERNAL_KEY
         .with(|thread_data| thread_data.borrow().clone())
         .expect("Server Key is not set ! Failed to initialize ThreadPool");
@@ -50,8 +61,32 @@ pub fn initialize_thread_pool() {
     })
 }
 
-#[derive(Clone)]
-pub struct FHEByte {
+#[inline(always)]
+fn with_thread_pool<F>(func: F)
+where
+    F: FnOnce(&ThreadPool) + std::marker::Send,
+{
+    THREAD_POOL.with_borrow(|maybe_pool| {
+        let pool = maybe_pool.as_ref()
+            .expect("ThreadPool should be initialized before any parallel tasks");
+        pool.install(|| func(pool));
+    });
+}
+
+#[inline(always)]
+fn with_server_key<F>(func: F)
+where
+    F: FnOnce(&ServerKey),
+{
+    INTERNAL_KEY.with_borrow(|maybe_server_key| {
+        let server_key = maybe_server_key.as_ref()
+            .expect("ThreadPool should have initialized and cloned ServerKey");
+        func(server_key);
+    });
+}
+
+#[derive(Clone, Debug)]
+pub struct FHEByte { // TODO: REDO WITH THE DAMN FOR EACH WITH instead of FOR EACH !!!!!!!!!!!!!! and see if there is any marginal improvement.
     data: VecDeque<Ciphertext>, //TODO: Convert to fixed size array
 }
 
@@ -72,107 +107,66 @@ impl FHEByte {
         self.data.iter().map(|x| client_key.decrypt(x)).collect()
     }
 
-    pub fn xor(&self, rhs: &Self) -> Self {
-        //TODO: Convert to in place versions, using assign, add clear version
-        let data = THREAD_POOL.with_borrow(|maybe_pool| {
-            let pool = maybe_pool
-                .as_ref()
-                .expect("ThreadPool has to be initialized before using any operations!");
-            let zipped_data: Vec<_> = self.data.iter().zip(rhs.data.iter()).collect();
+    pub fn xor_in_place(&mut self, rhs: &Self, pool: &ThreadPool) {
+        let zipped_data: Vec<_> = self.data.iter_mut().zip(rhs.data.iter()).collect();
 
-            pool.install(move || {
-                zipped_data
-                    .into_par_iter()
-                    .map(|(x, y)| {
-                        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-                            let server_key = maybe_server_key
-                                .as_ref()
-                                .expect("ThreadPool should have initialized and cloned ServerKey");
-                            server_key.xor(x, y)
-                        })
-                    })
-                    .collect()
-            })
-        });
-
-        FHEByte { data }
+        pool.install(move || {
+            zipped_data
+                .into_par_iter()
+                .for_each(|(x, y)| with_server_key(|server_key: &ServerKey| server_key.xor_assign(x, y)))
+        })
     }
 
-    pub fn and(&self, rhs: &Self) -> Self {
-        //TODO: Convert to in place versions, using assign
-        let data = THREAD_POOL.with_borrow(|maybe_pool| {
-            let pool = maybe_pool
-                .as_ref()
-                .expect("ThreadPool has to be initialized before using any operations!");
-            let zipped_data: Vec<_> = self.data.iter().zip(rhs.data.iter()).collect();
-
-            pool.install(move || {
-                zipped_data
-                    .into_par_iter()
-                    .map(|(x, y)| {
-                        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-                            let server_key = maybe_server_key
-                                .as_ref()
-                                .expect("ThreadPool should have initialized and cloned ServerKey");
-                            server_key.and(x, y)
-                        })
-                    })
-                    .collect()
-            })
-        });
-
-        FHEByte { data }
+    pub fn xor(&self, rhs: &Self, pool: &ThreadPool) -> Self {
+        let mut result = self.clone();
+        result.xor_in_place(rhs, pool);
+        result
     }
 
-    fn or(&self, rhs: &Self) -> Self {
-        //TODO: Convert to in place versions, using assign
-        let data = THREAD_POOL.with_borrow(|maybe_pool| {
-            let pool = maybe_pool
-                .as_ref()
-                .expect("ThreadPool has to be initialized before using any operations!");
-            let zipped_data: Vec<_> = self.data.iter().zip(rhs.data.iter()).collect();
+    pub fn and_in_place(&mut self, rhs: &Self, pool: &ThreadPool) {
+        let zipped_data: Vec<_> = self.data.iter_mut().zip(rhs.data.iter()).collect();
 
-            pool.install(move || {
-                zipped_data
-                    .into_par_iter()
-                    .map(|(x, y)| {
-                        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-                            let server_key = maybe_server_key
-                                .as_ref()
-                                .expect("ThreadPool should have initialized and cloned ServerKey");
-                            server_key.or(x, y)
-                        })
-                    })
-                    .collect()
-            })
-        });
-
-        FHEByte { data }
+        pool.install(move || {
+            zipped_data
+                .into_par_iter()
+                .for_each(|(x, y)| with_server_key(|server_key: &ServerKey| server_key.and_assign(x, y)))
+        })
     }
 
-    fn not(&self) -> Self {
-        //TODO: Convert to in place versions, using assign
-        let data = THREAD_POOL.with_borrow(|maybe_pool| {
-            let pool = maybe_pool
-                .as_ref()
-                .expect("ThreadPool has to be initialized before using any operations!");
-            let data = self.data.clone();
+    pub fn and(&self, rhs: &Self, pool: &ThreadPool) -> Self {
+        let mut result = self.clone();
+        result.and_in_place(rhs, pool);
+        result
+    }
 
-            pool.install(move || {
-                data.par_iter()
-                    .map(move |x| {
-                        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-                            let server_key = maybe_server_key
-                                .as_ref()
-                                .expect("ThreadPool should have initialized and cloned ServerKey");
-                            server_key.not(x)
-                        })
-                    })
-                    .collect()
-            })
-        });
+    pub fn or_in_place(&mut self, rhs: &Self, pool: &ThreadPool) {
+        let zipped_data: Vec<_> = self.data.iter_mut().zip(rhs.data.iter()).collect();
 
-        FHEByte { data }
+        pool.install(move || {
+            zipped_data
+                .into_par_iter()
+                .for_each(|(x, y)| with_server_key(|server_key: &ServerKey| server_key.or_assign(x, y)))
+        })
+    }
+
+    pub fn or(&self, rhs: &Self, pool: &ThreadPool) -> Self {
+        let mut result = self.clone();
+        result.or_in_place(rhs, pool);
+        result
+    }
+
+    pub fn not_in_place(&mut self, pool: &ThreadPool) {
+        pool.install(move || {
+            self.data
+                .par_iter_mut()
+                .for_each(|x| with_server_key(|server_key: &ServerKey| server_key.not_assign(x)))
+        })
+    }
+
+    pub fn not(&self, pool: &ThreadPool) -> Self {
+        let mut result = self.clone();
+        result.not_in_place(pool);
+        result
     }
 
     fn rotate_right_in_place(&mut self, shift: usize) -> () {
@@ -200,10 +194,7 @@ impl FHEByte {
     fn shift_right_in_place(&mut self, shift: usize) -> () {
         //TODO: Convert to fixed size array
         let shift = shift.clamp(0, 8);
-        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-            let server_key = maybe_server_key
-                .as_ref()
-                .expect("ThreadPool should have initialized and cloned ServerKey");
+        with_server_key(|server_key: &ServerKey| {
             for _ in 0..shift {
                 self.data.push_front(server_key.trivial_encrypt(false));
                 self.data.pop_back();
@@ -214,10 +205,8 @@ impl FHEByte {
     fn shift_left_in_place(&mut self, shift: usize) -> () {
         //TODO: Convert to fixed size array
         let shift = shift.clamp(0, 8);
-        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-            let server_key = maybe_server_key
-                .as_ref()
-                .expect("ThreadPool should have initialized and cloned ServerKey");
+
+        with_server_key(|server_key: &ServerKey| {
             for _ in 0..shift {
                 self.data.push_back(server_key.trivial_encrypt(false));
                 self.data.pop_front();
@@ -237,18 +226,6 @@ impl FHEByte {
         result
     }
 
-    fn trivial_false() -> Self {
-        INTERNAL_KEY.with_borrow(|maybe_server_key| {
-            let server_key = maybe_server_key
-                .as_ref()
-                .expect("ThreadPool should have initialized and cloned ServerKey");
-            FHEByte {
-                data: std::iter::repeat(server_key.trivial_encrypt(false))
-                    .take(8)
-                    .collect(),
-            } // TODO: Write this better, but Ciphertext doesn't impl Copy trait
-        })
-    }
     fn trivial_clear(clear_value: u8) -> Self {
         INTERNAL_KEY.with_borrow(|maybe_server_key| {
             let server_key = maybe_server_key
@@ -261,6 +238,11 @@ impl FHEByte {
             FHEByte { data }
         })
     }
+
+    fn trivial_false() -> Self {
+        Self::trivial_clear(0)
+    }
+
     fn _sub_byte(&self) -> Self {
         //TODO: After staged execution, this should be removed. Old iterator version.
         let visited = Arc::new(DashMap::new());
@@ -321,43 +303,17 @@ impl FHEByte {
         })
     }
 
-    pub fn mul_x_gf2(&mut self) -> Self {
-        //TODO: Convert xor to in place versions, using assign and replace the xor, add clear version
+    pub fn mul_x_gf2_in_place(&mut self, pool: &ThreadPool) {
         self.shift_left_in_place(1);
         let irr_poly = FHEByte::trivial_clear(0x1b);
-        self.xor(&irr_poly)
+        self.xor_in_place(&irr_poly, pool)
     }
-}
 
-impl BitXor for FHEByte {
-    type Output = Self;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        self.xor(&rhs)
-    }
-}
-
-impl BitAnd for FHEByte {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        self.and(&rhs)
-    }
-}
-
-impl BitOr for FHEByte {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        self.or(&rhs)
-    }
-}
-
-impl Not for FHEByte {
-    type Output = Self;
-
-    fn not(self) -> Self::Output {
-        (&self).not()
+    pub fn mul_x_gf2(&self, pool: &ThreadPool) -> Self {
+        //TODO: Convert xor to in place versions, using assign and replace the xor, add clear version
+        let mut result = self.clone();
+        result.mul_x_gf2_in_place(pool);
+        result
     }
 }
 
@@ -369,13 +325,14 @@ mod tests {
     use super::*;
     use tfhe::boolean::gen_keys;
 
+
     #[test]
     fn test_xor() {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
         initialize_thread_pool();
 
-        let x = FHEByte::new(
+        let mut x = FHEByte::new(
             &vec![true, true, true, true, true, true, true, true],
             &client_key,
         );
@@ -383,34 +340,28 @@ mod tests {
             &vec![true, false, true, false, true, true, true, true],
             &client_key,
         );
-        let mut z = FHEByte::new(
-            &vec![true, false, true, false, true, true, true, true],
-            &client_key,
-        );
 
-        let mut val = FHEByte::new(
-            &vec![true, true, true, true, true, true, true, true],
-            &client_key,
-        );
+
+
+        let mut test_data: Vec<_> = (0..200).into_iter().map(|_| x.clone()).collect();
         let start = Instant::now();
-        for _ in 0..1000 {
-            val = x.xor(&y);
-        }
-        println!("BORROW_PARALLEL_XOR {:?}", start.elapsed() / 1000);
+            with_thread_pool (|pool| {
+                    test_data
+                        .iter_mut()
+                        .for_each(|x| {
+                            x.xor_in_place(&y, pool)
+                        })
+            });
 
-        let start = Instant::now();
-        for _ in 0..1000 {
-            z = x.clone() ^ y.clone();
-        }
-        println!("CONSUME_PARALLEL_XOR {:?}", start.elapsed() / 1000);
 
+
+        println!("PAR_ITER_XOR_METHOD {:?}", start.elapsed() / 200);
         assert!(
-            val.decrypt(&client_key) == vec![false, true, false, true, false, false, false, false]
+            test_data[0].decrypt(&client_key)
+                == vec![false, true, false, true, false, false, false, false]
         );
-        assert_eq!(z.decrypt(&client_key), vec![
-            false, true, false, true, false, false, false, false
-        ]);
     }
+
 
     #[test]
     fn test_and() {
@@ -426,31 +377,31 @@ mod tests {
             &vec![true, false, true, false, true, true, true, true],
             &client_key,
         );
-        let mut z = FHEByte::new(
-            &vec![true, false, true, false, true, true, true, true],
-            &client_key,
-        );
 
-        let mut val = FHEByte::new(
-            &vec![true, true, true, true, true, true, true, true],
-            &client_key,
-        );
-        let start = Instant::now();
-        for _ in 0..1000 {
-            val = x.and(&y);
-        }
-        println!("BORROW_PARALLEL_AND {:?}", start.elapsed() / 1000);
+        let mut x_cipher = client_key.encrypt(false);
+        let y_cipher = client_key.encrypt(true);
 
         let start = Instant::now();
         for _ in 0..1000 {
-            z = x.clone() & y.clone();
+            server_key.and_assign(&mut x_cipher, &y_cipher);
         }
-        println!("CONSUME_PARALLEL_AND {:?}", start.elapsed() / 1000);
+        println!("NON-Parallel AND {:?}", start.elapsed() / 1000);
 
-        assert!(val.decrypt(&client_key) == vec![true, false, true, false, true, true, true, true]);
-        assert_eq!(z.decrypt(&client_key), vec![
-            true, false, true, false, true, true, true, true
-        ]);
+        let mut test_data: Vec<_> = (0..4).into_iter().map(|_| x.clone()).collect();
+        let start = Instant::now();
+        with_thread_pool (|pool| {
+                test_data
+                    .par_iter_mut()
+                    .map(|x| x.and_in_place(&y, pool))
+                    .collect::<Vec<_>>();
+        });
+
+        println!("PAR_ITER_AND_METHOD {:?}", start.elapsed() / 1000);
+
+        assert!(
+            test_data[0].decrypt(&client_key)
+                == vec![true, false, true, false, true, true, true, true]
+        );
     }
 
     #[test]

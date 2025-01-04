@@ -1,5 +1,6 @@
 #![feature(iter_array_chunks)]
 #![feature(array_chunks)]
+#![feature(ptr_internals)] 
 
 use rayon::prelude::*;
 use rayon::scope;
