@@ -1,6 +1,6 @@
 use crate::boolean_tree::*;
 
-const S_BOX_DATA: [u8; 256] = [
+pub const S_BOX_DATA: [u8; 256] = [
     0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
     0xCA, 0x82, 0xC9, 0x7D, 0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0,
     0xB7, 0xFD, 0x93, 0x26, 0x36, 0x3F, 0xF7, 0xCC, 0x34, 0xA5, 0xE5, 0xF1, 0x71, 0xD8, 0x31, 0x15,
@@ -19,18 +19,17 @@ const S_BOX_DATA: [u8; 256] = [
     0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16,
 ];
 
-fn bit_x_s_box(position: u8) -> Vec<bool> {
-    S_BOX_DATA
+fn bit_x_s_box(data: [u8; 256], position: u8) -> Vec<bool> {
+    data
         .iter()
-        .rev()
         .map(|&x| (x & (1 << position)) != 0)
         .collect()
 }
 
-pub fn generate_reduced_bool_expr() -> Vec<BooleanExpr> {
+pub fn generate_reduced_bool_expr(data: [u8; 256]) -> Vec<BooleanExpr> {
     (0..8)
         .into_iter()
-        .map(|x| bit_x_s_box(x))
+        .map(|x| bit_x_s_box(data, x))
         .map(|x| BooleanExpr::from_bool_vec(&x))
         .map(|x| BooleanExpr::reduce_mux(&x))
         .collect()
@@ -40,25 +39,47 @@ pub fn generate_reduced_bool_expr() -> Vec<BooleanExpr> {
 
 mod tests {
 
-    use std::{cell::RefCell, rc::Rc, vec};
-
     use super::*;
     use crate::boolean_tree::tests::*;
     use dashmap::DashMap;
+    use core::iter::Iterator;
     use std::sync::Arc;
     use tfhe::boolean::gen_keys;
+    use rayon::prelude::*;
+
+    fn clear_bools_to_u8(bools: &[bool]) -> u8 {
+            bools
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
+                .sum()
+    }
+
+    fn clear_u8_to_bools(x: u8) -> Vec<bool> {
+        (0..8)
+        .rev()
+        .into_iter()
+        .map(|i| (x & (1 << i)) != 0)
+        .collect()
+    }
 
     #[test]
-    fn test_bit_0() {
-        let x = generate_reduced_bool_expr();
+    fn test_all() {
+        let x = generate_reduced_bool_expr(S_BOX_DATA);
         let (client_key, server_key) = gen_keys();
-        let true_enc = client_key.encrypt(true);
-        let bool_bits = vec![false, false, false, false, false, false, false, false];
-        let bits = bool_to_ciphertext(&bool_bits, &client_key);
-        let y = x[6].evaluate(&bits, &true_enc, &server_key, Arc::new(DashMap::new()));
-
-        println!("{:?}", bit_x_s_box(2));
-
-        assert_eq!(client_key.decrypt(&y), true)
+        
+        (0..=255).into_par_iter().for_each_with(x, |x, test_x| {
+            let bool_bits = clear_u8_to_bools(test_x);
+            let mut bits: Vec<_> = bool_to_ciphertext(&bool_bits, &client_key);            let visited = Arc::new(DashMap::new());
+    
+            let clear_bools: Vec<_> = x.into_par_iter().map(|bit|
+                client_key.decrypt(&bit.evaluate(&bits, &server_key, Arc::clone(&visited))
+            )).collect();
+    
+            let result = clear_bools_to_u8(&clear_bools);
+            let expected_result = S_BOX_DATA[test_x as usize];
+            assert_eq!(result, expected_result, "LEFT: {:#b}, RIGHT {:#b}", result, expected_result)
+        })
     }
+
 }
