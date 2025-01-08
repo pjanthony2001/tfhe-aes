@@ -13,6 +13,7 @@ use crate::sbox::*;
 thread_local! {
     static INTERNAL_KEY: RefCell<Option<ServerKey>> = const { RefCell::new(None) };
     static S_BOX_EXPR: RefCell<Vec<BooleanExpr>> = RefCell::new(generate_reduced_bool_expr(S_BOX_DATA));
+    static INV_S_BOX_EXPR: RefCell<Vec<BooleanExpr>> = RefCell::new(generate_reduced_bool_expr(INV_S_BOX_DATA));
 }
 
 pub fn set_server_key(key: &ServerKey) {
@@ -226,16 +227,39 @@ impl FHEByte {
     pub fn sub_byte(&self, server_key: &ServerKey) -> Self {
         //TODO: Do staged evaluation.
         let visited = Arc::new(DashMap::new());
-        let mut curr_data = self.data.clone();
-        curr_data.make_contiguous();
-        let curr_data_slice: &[Ciphertext] = curr_data.as_slices().0;
-        assert!(curr_data.as_slices().1.len() == 0);
+        let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
+
 
         let data = S_BOX_EXPR.with_borrow(|s_box_exprs| {
             s_box_exprs
                 .par_iter()
                 .map_with(
-                    (curr_data_slice, server_key),
+                    (curr_data, server_key),
+                    move |(curr_data, server_key), x| {
+                        x.evaluate(
+                            curr_data,
+                            server_key,
+                            Arc::clone(&visited),
+                        )
+                    },
+                )
+                .collect()
+        });
+
+        FHEByte { data }
+    }
+
+    pub fn inv_sub_byte(&self, server_key: &ServerKey) -> Self {
+        //TODO: Do staged evaluation.
+        let visited = Arc::new(DashMap::new());
+        let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
+
+
+        let data = INV_S_BOX_EXPR.with_borrow(|s_box_exprs| {
+            s_box_exprs
+                .par_iter()
+                .map_with(
+                    (curr_data, server_key),
                     move |(curr_data, server_key), x| {
                         x.evaluate(
                             curr_data,

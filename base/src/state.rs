@@ -1,4 +1,5 @@
 use crate::primitive::*;
+use itertools::chain;
 use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 
@@ -22,11 +23,22 @@ impl State {
 
         State { data }
     }
+
     fn sub_bytes(&mut self, server_key: &ServerKey) {
         self.data = self
             .data
             .par_iter()
             .map_with(server_key, |server_key, byte| byte.sub_byte(server_key))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+    }
+
+    fn inv_sub_bytes(&mut self, server_key: &ServerKey) {
+        self.data = self
+            .data
+            .par_iter()
+            .map_with(server_key, |server_key, byte| byte.inv_sub_byte(server_key))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -83,8 +95,94 @@ impl State {
         self.data = y
     }
 
-    fn xor_key_enc(&mut self, key: [FHEByte; 16], server_key: &ServerKey) {
 
+    fn inv_mix_columns(&mut self, server_key: &ServerKey) {
+        let data_order: [usize; 16] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3];
+
+        let mut y: [FHEByte; 16] = (0..16_usize)
+            .into_par_iter()
+            .map_with(server_key, |server_key, i| {
+                self.data[i].xor(&self.data[(i + 4)  % 16], server_key)
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let mut temp_0: [FHEByte; 8] = (0..8)
+        .into_par_iter()            
+        .map_with(server_key, |server_key, i| {
+            self.data[i].xor(&self.data[i + 8], server_key)
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap(); // (X_i XOR X_(i + 2))
+
+        temp_0.par_iter_mut().for_each_with(server_key, |server_key, x| {
+            x.mul_x_gf2_in_place(server_key)
+        }); // 02 * (X_i XOR X_(i + 2))
+
+        temp_0.par_iter_mut().for_each_with(server_key, |server_key, x| {
+            x.mul_x_gf2_in_place(server_key)
+        }); // 04 * (X_i XOR X_(i + 2))
+
+        let mut temp_1: [FHEByte; 4] = y[..4].par_iter().zip(y[8..12].par_iter())     
+        .map_with(server_key, |server_key, (x, y)| {
+            x.xor(y, server_key)
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap(); // (X_0 ^ X_1 ^ X_2 ^ X_3)
+
+        let temp_0_iter = temp_0[..4].par_iter().chain(temp_0[..4].par_iter()).chain(temp_0[4..].par_iter()).chain(temp_0[4..].par_iter());
+
+        y.par_iter_mut().zip(temp_0_iter).for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
+        });
+
+        let temp_1_iter = temp_1.par_iter().chain(temp_1.par_iter()).chain(temp_1.par_iter()).chain(temp_1.par_iter());
+
+        self.data.par_iter_mut().zip(y.par_iter()).for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
+        });
+
+        self.data.par_iter_mut().zip(temp_1_iter).for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
+        }); 
+
+        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
+            x.mul_x_gf2_in_place(server_key)
+        });
+
+        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
+            x.mul_x_gf2_in_place(server_key)
+        });
+
+        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
+            x.mul_x_gf2_in_place(server_key)
+        }); //08 * (X_0 ^ X_1 ^ X_2 ^ X_3)
+
+        let temp_1_iter = temp_1.par_iter().chain(temp_1.par_iter()).chain(temp_1.par_iter()).chain(temp_1.par_iter());
+
+        self.data.par_iter_mut().zip(temp_1_iter).for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
+        }); 
+
+    }
+
+    fn xor_key_enc(&mut self, key: &[FHEByte; 16], server_key: &ServerKey) {
+        self.data.par_iter_mut()
+        .zip(key.par_iter())
+        .for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
+        });
+    }
+
+    fn xor_key_clear(&mut self, key: &[u8; 16], server_key: &ServerKey) {
+        self.data.par_iter_mut()
+        .zip(key.into_par_iter())
+        .for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(&FHEByte::trivial_clear(*y, server_key), server_key)
+        });
     }
 
     fn decrypt_to_u8(&self, client_key: &ClientKey) -> [u8; 16] {
@@ -95,13 +193,24 @@ impl State {
     }
 
     fn shift_rows(&mut self) {
-        let slice = &mut self.data[..4];
+        let mut slice = &mut self.data[4..8];
         slice.rotate_left(1);
-        let slice = &mut self.data[4..8];
+        slice = &mut self.data[8..12];
         slice.rotate_left(2);
-        let slice = &mut self.data[8..12];
+        slice = &mut self.data[12..];
         slice.rotate_left(3);
     }
+
+    fn inv_shift_rows(&mut self) {
+        let mut slice = &mut self.data[4..8];
+        slice.rotate_right(1);
+        slice = &mut self.data[8..12];
+        slice.rotate_right(2);
+        slice = &mut self.data[12..];
+        slice.rotate_right(3);
+    }
+
+
 }
 
 #[cfg(test)]
@@ -154,4 +263,26 @@ fn test_sub_bytes() {
     println!("TIME TAKEN {:?}", start.elapsed() / 1);
 
     }
+    #[test]
+fn test_shift_rows() {
+    let (client_key, server_key) = gen_keys();
+    set_server_key(&server_key);
+    let state = State::new(0x19a09ae9_3df4c6f8_e3e28d48_be2b2a08, &client_key);
+    let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
+
+    let start = Instant::now();
+    with_server_key(|server_key| {
+        test_data
+            .par_iter_mut()
+            .map_with(server_key, |server_key, state| {
+                state.shift_rows()
+            })
+            .collect::<Vec<_>>()
+    });
+
+    println!("{:#x?}", test_data[0].decrypt_to_u8(&client_key));
+    println!("TIME TAKEN {:?}", start.elapsed() / 1);
+
+    }
+
 }
