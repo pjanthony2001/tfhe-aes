@@ -1,5 +1,7 @@
 use dashmap::DashMap;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::hash::{Hash, Hasher};
+use std::collections::HashSet;
 use std::ops::Not;
 use std::sync::Arc;
 use tfhe::boolean::prelude::*;
@@ -88,6 +90,10 @@ impl Operand {
             Operand::Bit7 => bits[7].clone(),
             Operand::NotBit7 => server_key.not(&bits[7]),
         }
+    }
+
+    pub fn stage(&self) -> u8 {
+        0
     }
 }
 
@@ -271,6 +277,51 @@ impl BooleanExpr {
     pub fn from_bool_vec(items: &[bool]) -> Vec<BooleanExpr> {
         items.into_iter().map(|&x| BooleanExpr::from(x)).collect()
     }
+
+    pub fn stage(&self) -> u8 {
+        match self {
+            BooleanExpr::Operand(op) => op.stage(),
+            BooleanExpr::And(lhs, rhs) => std::cmp::max(lhs.stage(), rhs.stage()) + 1,
+            BooleanExpr::Or(lhs, rhs) => std::cmp::max(lhs.stage(), rhs.stage()) + 1,
+            BooleanExpr::Xor(lhs, rhs) => std::cmp::max(lhs.stage(), rhs.stage()) + 1,
+            BooleanExpr::Mux(_, lhs, rhs) => std::cmp::max(lhs.stage(), rhs.stage()) + 1,
+        }
+    }
+
+    pub fn to_hashset(&self, hashset: &mut HashSet<BooleanExpr>) {
+        hashset.insert(self.clone());
+        match self {
+            BooleanExpr::Operand(_) => {
+                hashset.insert(self.clone());
+            },
+            BooleanExpr::And(lhs, rhs) => {
+                lhs.to_hashset(hashset);
+                rhs.to_hashset(hashset);
+            },
+            BooleanExpr::Or(lhs, rhs) => {
+                lhs.to_hashset(hashset);
+                rhs.to_hashset(hashset);
+            },
+            BooleanExpr::Xor(lhs, rhs) => {
+                lhs.to_hashset(hashset);
+                rhs.to_hashset(hashset);
+            },
+            BooleanExpr::Mux(_, lhs, rhs) => {
+                lhs.to_hashset(hashset);
+                rhs.to_hashset(hashset);
+            },
+        }
+    }
+
+    pub fn evaluate_hashset(
+        hashset: &HashSet<BooleanExpr>,
+        bits: &[Ciphertext],
+        server_key: &ServerKey,
+        visited: Arc<DashMap<BooleanExpr, Ciphertext>>,
+    ) {
+        hashset.par_iter().for_each_with(server_key, |server_key, expr| { expr.evaluate(bits, server_key, visited.clone()); });
+
+    }
 }
 
 impl From<bool> for BooleanExpr {
@@ -329,7 +380,7 @@ impl Ord for BooleanExpr {
                         .cmp(op2)
                         .then_with(|| lhs1.cmp(lhs2))
                         .then_with(|| rhs1.cmp(rhs2)),
-                    _ => Ordering::Equal, // Shouldn't reach here
+                    _ => Ordering::Equal, 
                 }
             }
             other_ordering => other_ordering,

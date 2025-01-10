@@ -358,11 +358,10 @@ fn test_shift_rows() {
             let start = Instant::now();
             with_server_key(|server_key| {
                 test_data
-                    .par_iter_mut()
-                    .map_with(server_key, |server_key, state| {
+                    .iter_mut()
+                    .for_each(|state| {
                         state.xor_key_enc(&Key::from_u128_enc(0x01, &client_key), &server_key)
                     })
-                    .collect::<Vec<_>>()
             });
         
             println!("{:#x?}", test_data[0].decrypt_to_u8(&client_key));

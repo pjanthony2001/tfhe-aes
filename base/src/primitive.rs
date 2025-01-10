@@ -1,9 +1,8 @@
 use dashmap::DashMap;
 use rayon::prelude::*;
-use std::cell::RefCell;
 use std::sync::Arc;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{RwLock, LazyLock};
 use tfhe::boolean::prelude::*;
 use tfhe::boolean::server_key::*;
@@ -239,23 +238,45 @@ impl FHEByte {
 
         let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
         let s_box_exprs: &Vec<BooleanExpr> = lazy_lock_sbox.as_ref();
+        let mut hashset: HashSet<BooleanExpr> = HashSet::new();
+        for expr in s_box_exprs.iter() {
+            expr.to_hashset(&mut hashset);
+        }
 
+        let mut grouped_by_stage: Vec<HashSet<BooleanExpr>> = vec![HashSet::new(); 8];
+
+        // Iterate over each BooleanExpr and insert them into the appropriate HashSet based on their stage
+        for expr in hashset {
+            let stage = expr.stage() as usize;
+            grouped_by_stage[stage].insert(expr);
+        }
+
+        println!("Hashset lengths {:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
+
+        for i in 0..8 {
+            BooleanExpr::evaluate_hashset(&grouped_by_stage[i], &curr_data.clone(), server_key, visited.clone());
+        }
 
         let data =
             s_box_exprs
-                .par_iter()
-                .map_with(
-                    (curr_data, server_key),
-                    move |(curr_data, server_key), x| {
-                        x.evaluate(
-                            curr_data,
-                            server_key,
-                            Arc::clone(&visited),
-                        )
-                    },
-                )
+                .iter()
+                .map(|x| {
+                    x.evaluate(
+                        &curr_data.clone(),
+                        server_key,
+                        Arc::clone(&visited),
+                    )
+                })
                 .collect();
 
+        let mut stages= vec![0,0,0,0,0,0,0,0,0,0,0,0,0]; 
+
+        for entry in visited.iter() {
+            stages[entry.key().stage() as usize] += 1;
+        }
+
+        println!("STAGES {:?}", stages);
+        println!("TOTAL STAGES {:?}", visited.len());
         FHEByte { data }
     }
 

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::boolean_tree::*;
 
 //TODO: FIX ALL THE MULTIPLE REVERSING.
@@ -57,6 +59,27 @@ pub fn generate_reduced_bool_expr(data: [u8; 256]) -> Vec<BooleanExpr> {
         .map(|x| BooleanExpr::reduce_mux(&x))
         .collect()
 }
+
+pub fn stage_exprs(data: [u8; 256]) -> Vec<HashSet<BooleanExpr>> {
+    let s_box_exprs = generate_reduced_bool_expr(data);
+    let mut hashset: HashSet<BooleanExpr> = HashSet::new();
+
+    for expr in s_box_exprs {
+        expr.to_hashset(&mut hashset);
+    }
+
+    let mut grouped_by_stage: Vec<HashSet<BooleanExpr>> = vec![HashSet::new(); 8];
+
+    // Iterate over each BooleanExpr and insert them into the appropriate HashSet based on their stage
+    for expr in hashset {
+        let stage = expr.stage() as usize;
+        grouped_by_stage[stage].insert(expr);
+    }
+
+    println!("{:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
+    grouped_by_stage
+}
+
 
 #[cfg(test)]
 
