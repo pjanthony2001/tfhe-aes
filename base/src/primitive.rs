@@ -4,26 +4,26 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use std::collections::VecDeque;
+use std::sync::{RwLock, LazyLock};
 use tfhe::boolean::prelude::*;
 use tfhe::boolean::server_key::*;
 
 use crate::boolean_tree::BooleanExpr;
 use crate::sbox::*;
 
-thread_local! {
-    static INTERNAL_KEY: RefCell<Option<ServerKey>> = const { RefCell::new(None) };
-    static S_BOX_EXPR: RefCell<Vec<BooleanExpr>> = RefCell::new(generate_reduced_bool_expr(S_BOX_DATA));
-    static INV_S_BOX_EXPR: RefCell<Vec<BooleanExpr>> = RefCell::new(generate_reduced_bool_expr(INV_S_BOX_DATA));
-}
+
+    pub static INTERNAL_KEY: RwLock<Option<ServerKey>> = const { RwLock::new(None) };
+    pub static S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(S_BOX_DATA)));
+    pub static INV_S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(INV_S_BOX_DATA)));
 
 pub fn set_server_key(key: &ServerKey) {
-    INTERNAL_KEY.with(|internal_keys| internal_keys.replace_with(|_old| Some(key.clone())));
+    let mut guard_internal_key = INTERNAL_KEY.write().unwrap();
+    *guard_internal_key = Some(key.clone());
 }
 
 pub fn unset_server_key() {
-    INTERNAL_KEY.with(|internal_keys| {
-        let _ = internal_keys.replace_with(|_old| None);
-    })
+    let mut guard_internal_key = INTERNAL_KEY.write().unwrap();
+    *guard_internal_key = None;
 }
 
 #[inline(always)]
@@ -32,12 +32,11 @@ where
     F: FnOnce(&ServerKey) -> T + std::marker::Send,
     T: std::marker::Send,
 {
-    INTERNAL_KEY.with_borrow(|maybe_server_key| {
-        let server_key = maybe_server_key
-            .as_ref()
-            .expect("ThreadPool should have initialized and cloned ServerKey");
-        func(server_key)
-    })
+
+    let guard_internal_key = INTERNAL_KEY.read().unwrap();
+    let server_key = &guard_internal_key.as_ref().expect("Set the server key before calling any functions !!");
+    func(server_key)
+
 }
 
 #[derive(Clone, Debug)]
@@ -59,10 +58,18 @@ impl FHEByte {
         Self { data }
     }
 
-    pub fn from_u8(value: &u8, client_key: &ClientKey) -> Self {
+    pub fn from_u8_enc(value: &u8, client_key: &ClientKey) -> Self {
         let data: VecDeque<Ciphertext> = (0..8)
             .rev()
             .map(|i| client_key.encrypt(value & (1 << i) != 0))
+            .collect();
+        Self { data }
+    }
+
+    pub fn from_u8_clear(value: &u8, server_key: &ServerKey) -> Self {
+        let data: VecDeque<Ciphertext> = (0..8)
+            .rev()
+            .map(|i| server_key.trivial_encrypt(value & (1 << i) != 0))
             .collect();
         Self { data }
     }
@@ -200,26 +207,27 @@ impl FHEByte {
         //TODO: After staged execution, this should be removed. Old iterator version.
         let visited = Arc::new(DashMap::new());
 
-        let data = S_BOX_EXPR.with_borrow(|s_box_exprs| {
+        
+    let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
+    let s_box_exprs: &Vec<BooleanExpr> = lazy_lock_sbox.as_ref();
+
+
+        let data = 
             s_box_exprs
                 .iter()
                 .rev()
                 .map(move |x| {
                     let mut curr_data = self.data.clone();
                     let curr_visited = visited.clone();
-                    INTERNAL_KEY.with_borrow(|maybe_server_key| {
-                        let server_key = maybe_server_key
-                            .as_ref()
-                            .expect("ThreadPool should have initialized and cloned ServerKey");
+                    let guard_maybe_key = INTERNAL_KEY.read().unwrap();
+                    let server_key = guard_maybe_key.as_ref().expect("INIT BEFORE USING KEY");
                         x.evaluate(
                             curr_data.make_contiguous(),
                             server_key,
                             curr_visited,
                         )
                     })
-                })
-                .collect()
-        });
+                .collect();
 
         FHEByte { data }
     }
@@ -229,8 +237,11 @@ impl FHEByte {
         let visited = Arc::new(DashMap::new());
         let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
 
+        let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
+        let s_box_exprs: &Vec<BooleanExpr> = lazy_lock_sbox.as_ref();
 
-        let data = S_BOX_EXPR.with_borrow(|s_box_exprs| {
+
+        let data =
             s_box_exprs
                 .par_iter()
                 .map_with(
@@ -243,8 +254,7 @@ impl FHEByte {
                         )
                     },
                 )
-                .collect()
-        });
+                .collect();
 
         FHEByte { data }
     }
@@ -254,9 +264,12 @@ impl FHEByte {
         let visited = Arc::new(DashMap::new());
         let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
 
+        let lazy_lock_inv_sbox = INV_S_BOX_EXPR.read().unwrap();
+        let inv_s_box_exprs: &Vec<BooleanExpr> = lazy_lock_inv_sbox.as_ref();
 
-        let data = INV_S_BOX_EXPR.with_borrow(|s_box_exprs| {
-            s_box_exprs
+
+        let data =
+        inv_s_box_exprs
                 .par_iter()
                 .map_with(
                     (curr_data, server_key),
@@ -268,8 +281,7 @@ impl FHEByte {
                         )
                     },
                 )
-                .collect()
-        });
+                .collect();
 
         FHEByte { data }
     }
@@ -370,7 +382,7 @@ mod tests {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
 
-        let x = FHEByte::from_u8(&0x01, &client_key);
+        let x = FHEByte::from_u8_enc(&0x01, &client_key);
 
         let start = Instant::now();
 
@@ -401,7 +413,7 @@ mod tests {
         set_server_key(&server_key);
 
         for clear_value in 0..=255 {
-            let x = FHEByte::from_u8(&clear_value, &client_key);
+            let x = FHEByte::from_u8_enc(&clear_value, &client_key);
             let start = Instant::now();
     
             let y: Vec<_> = with_server_key(|server_key| {

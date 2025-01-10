@@ -2,8 +2,13 @@
 #![feature(array_chunks)]
 
 
-mod boolean_tree;
-mod primitive;
-mod sbox;
-mod state;
+pub mod boolean_tree;
+pub mod primitive;
+pub mod sbox;
+pub mod state;
+pub mod key_schedule;
+
+pub use state::State;
+pub use primitive::FHEByte;
+pub use key_schedule::Key;
 
