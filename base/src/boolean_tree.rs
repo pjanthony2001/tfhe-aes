@@ -1,9 +1,13 @@
 use dashmap::DashMap;
+use rand::seq::index::IndexVec;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use tfhe::boolean::backward_compatibility::server_key;
+use core::hash;
 use std::hash::{Hash, Hasher};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
+use std::time::Instant;
 use tfhe::boolean::prelude::*;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -313,14 +317,135 @@ impl BooleanExpr {
         }
     }
 
-    pub fn evaluate_hashset(
-        hashset: &HashSet<BooleanExpr>,
-        bits: &[Ciphertext],
-        server_key: &ServerKey,
-        visited: Arc<DashMap<BooleanExpr, Ciphertext>>,
-    ) {
-        hashset.par_iter().for_each_with(server_key, |server_key, expr| { expr.evaluate(bits, server_key, visited.clone()); });
+    // pub fn evaluate_hashset(
+    //     hashset: &HashSet<BooleanExpr>,
+    //     server_key: &ServerKey,
+    //     operands: Arc<DashMap<Operand, Ciphertext>>,
+    //     inc_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,    
+    //     out_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,
+    // ) {
+    //     hashset.par_iter().for_each_with(server_key, |server_key, expr| { expr.evaluate_stage(server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone()); });
 
+    // }
+
+    
+    
+    #[inline(always)]
+    pub fn evaluate_stage<'a>(
+        &'a self,
+        server_key: &'a ServerKey,
+        operands: Arc<DashMap<Operand, Ciphertext>>,
+        inc_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>,
+        out_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>
+    ) -> Box<dyn FnOnce() -> () + 'a> {
+        match self {
+            BooleanExpr::Operand(op) => {let operand = operands.get(op).expect("Operand not in hashmap").value().clone(); Box::new(move || {out_hashmap.insert(self.clone(), Some(operand.clone()));})},
+            BooleanExpr::And(op_1, op_2) => 
+            {
+                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.and(&operand_1, &operand_2)));})
+            },
+            BooleanExpr::Or(op_1, op_2) => {
+                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.or(&operand_1, &operand_2)));})
+            },
+            BooleanExpr::Xor(op_1, op_2) => {
+                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.xor(&operand_1, &operand_2)));})
+            },
+            BooleanExpr::Mux(mux, op_1, op_2) => {
+                let mux_ = operands.get(mux).expect("Mux not in hashmap").value().clone();
+                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.mux(&mux_, &operand_1, &operand_2)));})
+            },
+        }
+
+    }
+
+    #[inline(always)]
+    pub fn evaluate_stage_return(
+        &self,
+        server_key: &ServerKey,
+        operands: Arc<DashMap<Operand, Ciphertext>>,
+        inc_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,
+    ) -> Ciphertext {
+
+        match self {
+            BooleanExpr::Operand(op) => operands.get(op).expect("Operand not in hashmap").value().clone(),
+            BooleanExpr::And(op_1, op_2) => server_key.and(
+                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
+                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+            ),
+            BooleanExpr::Or(op_1, op_2) => server_key.or(
+                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
+                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+            ),
+            BooleanExpr::Xor(op_1, op_2) => server_key.xor(
+                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
+                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+            ),
+            BooleanExpr::Mux(mux, op_1, op_2) => server_key.mux(
+                operands.get(mux).expect("Mux not in hashmap").value(),
+                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
+                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+            ),
+        }
+
+    }
+
+}
+
+
+enum Expression {
+    Operand(Ciphertext),
+    And(Ciphertext, Ciphertext),
+    Or(Ciphertext, Ciphertext),
+    Xor(Ciphertext, Ciphertext),
+    Mux(Ciphertext, Ciphertext, Ciphertext),
+}
+
+impl Expression {
+    fn from(value: BooleanExpr, inc_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>, operands: Arc<DashMap<Operand, Ciphertext>>) -> Self {
+        match value {
+            BooleanExpr::Operand(op) => {let operand = operands.get(&op).expect("Operand not in hashmap").value().clone(); Self::Operand(operand)},
+            BooleanExpr::And(op_1, op_2) => 
+            {
+                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Self::And(operand_1, operand_2)
+            },
+            BooleanExpr::Or(op_1, op_2) => {
+                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Self::Or(operand_1, operand_2)
+            },
+            BooleanExpr::Xor(op_1, op_2) => {
+                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Self::Xor(operand_1, operand_2)
+            },
+            BooleanExpr::Mux(mux, op_1, op_2) => {
+                let mux_ = operands.get(&mux).expect("Mux not in hashmap").value().clone();
+                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
+                Self::Mux(mux_, operand_1, operand_2)
+            },
+        }
+    }
+
+
+    fn evaluate(&self, server_key: &ServerKey, ) -> Ciphertext {
+        match self {
+            Expression::Operand(ciphertext) => ciphertext.clone(),
+            Expression::And(operand_1, operand_2) => server_key.and(operand_1, operand_2),
+            Expression::Or(operand_1, operand_2) => server_key.or(operand_1, operand_2),
+            Expression::Xor(operand_1, operand_2) => server_key.xor(operand_1, operand_2),
+            Expression::Mux(mux, operand_1, operand_2) => server_key.mux(mux, operand_1, operand_2),
+        }
     }
 }
 
@@ -427,6 +552,50 @@ impl Hash for BooleanExpr {
     }
 }
 
+
+struct Runnable {
+    bool_expr: BooleanExpr,
+    operands: Vec<Ciphertext>,
+}
+
+impl Runnable {
+    fn new(operands_: &HashMap<Operand, Ciphertext>, hashmap: &HashMap<BooleanExpr, Ciphertext>, bool_expr: BooleanExpr) -> Self {
+        let mut operands: Vec<_> = Vec::with_capacity(3);
+
+        match &bool_expr {
+            BooleanExpr::Operand(op) => {operands.push(operands_.get(&op).unwrap().clone())}
+            BooleanExpr::And(op1, op2) => {
+                operands.push(hashmap.get(&op1).unwrap().clone());
+                operands.push(hashmap.get(&op2).unwrap().clone());
+            },
+            BooleanExpr::Or(op1, op2) =>  {
+                operands.push(hashmap.get(&op1).unwrap().clone());
+                operands.push(hashmap.get(&op2).unwrap().clone());
+            },
+            BooleanExpr::Xor(op1, op2) =>  {
+                operands.push(hashmap.get(&op1).unwrap().clone());
+                operands.push(hashmap.get(&op2).unwrap().clone());
+            },
+            BooleanExpr::Mux(mux, op1, op2) => {
+                operands.push(operands_.get(&mux).unwrap().clone());
+                operands.push(hashmap.get(&op1).unwrap().clone());
+                operands.push(hashmap.get(&op2).unwrap().clone());
+            },
+        };
+
+        Self {bool_expr, operands: operands.try_into().unwrap()}
+    }
+    fn run(&self, server_key: &ServerKey) -> Ciphertext {
+        match self.bool_expr {
+            BooleanExpr::Operand(_) => self.operands[0].clone(),
+            BooleanExpr::And(_, _) => server_key.and(&self.operands[0], &self.operands[1]),
+            BooleanExpr::Or(_, _) => server_key.or(&self.operands[0], &self.operands[1]),
+            BooleanExpr::Xor(_, _) => server_key.xor(&self.operands[0], &self.operands[1]),
+            BooleanExpr::Mux(_, _, _) => server_key.mux(&self.operands[0], &self.operands[1], &self.operands[1]),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
 
@@ -435,6 +604,7 @@ pub mod tests {
     use super::*;
     use tfhe::boolean::gen_keys;
     use tfhe::boolean::prelude::*;
+    use rayon::prelude::*;
 
     pub fn bool_to_ciphertext(booleans: &[bool], client_key: &ClientKey) -> Vec<Ciphertext> {
         booleans.iter().map(|&x| client_key.encrypt(x)).collect()
@@ -773,5 +943,85 @@ pub mod tests {
 
             println!("TIME TAKEN: {:?}", total / 100);
         }
+    }
+
+    #[test]
+    fn test_evaluate_stage() {
+        let num_threads = rayon::current_num_threads();
+        println!("Rayon is using {} threads", num_threads);
+        // Setup server key and operands
+        let (client_key, server_key) = gen_keys();
+        // Assuming ServerKey has a new() method
+        let operands = Arc::new(DashMap::with_shard_amount(32));
+        let mut inc_hashmap = Arc::new(DashMap::with_shard_amount(32));
+        let mut out_hashmap = Arc::new(DashMap::with_shard_amount(32));
+
+        // Create some dummy Ciphertext values
+        let bit0 = client_key.encrypt(true);// Assuming Ciphertext has a new() method
+        let bit1 = client_key.encrypt(false);
+        let bit2 = client_key.encrypt(true);
+        let bit3 = client_key.encrypt(false);
+        // Insert operands and intermediate values into the hashmaps
+
+        operands.insert(Operand::Bit0, bit0);
+        operands.insert(Operand::Bit1, bit1);
+        operands.insert(Operand::Bit2, bit2);
+        operands.insert(Operand::Bit3, bit3);
+
+        let expr1 = BooleanExpr::Operand(Operand::Bit0);
+        let expr2 = BooleanExpr::Operand(Operand::Bit1);
+        let and_expr = BooleanExpr::And(Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let or_expr = BooleanExpr::Or(Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let xor_expr = BooleanExpr::Xor(Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let mux_expr_0 = BooleanExpr::Mux(Operand::Bit0, Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let mux_expr_1 = BooleanExpr::Mux(Operand::Bit1, Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let mux_expr_2 = BooleanExpr::Mux(Operand::Bit2, Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let mux_expr_3 = BooleanExpr::Mux(Operand::Bit3, Box::new(expr1.clone()), Box::new(expr2.clone()));
+        let mux_expr_4 = BooleanExpr::Mux(Operand::Bit0, Box::new(expr2.clone()), Box::new(expr1.clone()));
+        let mux_expr_5 = BooleanExpr::Mux(Operand::Bit1, Box::new(expr2.clone()), Box::new(expr1.clone()));
+        let mux_expr_6 = BooleanExpr::Mux(Operand::Bit2, Box::new(expr2.clone()), Box::new(expr1.clone()));
+        let mux_expr_7 = BooleanExpr::Mux(Operand::Bit3, Box::new(expr2.clone()), Box::new(expr1.clone()));
+
+        let test_suite  = [(expr1.clone(), None), (expr2.clone(), None)];
+
+        let mut dashmap = DashMap::with_shard_amount(32);
+        dashmap.extend(test_suite.clone());
+
+        out_hashmap = Arc::new(dashmap);
+
+        let start = Instant::now();
+
+        [expr1, expr2].par_iter().for_each_with(&server_key, |server_key, expr| {
+            expr.evaluate_stage(server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone());
+        });
+
+        println!("TIME TAKEN: {:?}", start.elapsed());
+
+        // Evaluate the AND expression
+        inc_hashmap = out_hashmap;
+        
+        let test_suite: [(BooleanExpr, Option<Ciphertext>); 8] = [(mux_expr_0.clone(), None), (mux_expr_1.clone(), None), (mux_expr_2.clone(), None), (mux_expr_3.clone(), None), (mux_expr_4.clone(), None), (mux_expr_5.clone(), None), (mux_expr_6.clone(), None), (mux_expr_7.clone(), None)];
+
+        let mut dashmap = DashMap::with_shard_amount(32);
+        dashmap.extend(test_suite.clone());
+
+        out_hashmap = Arc::new(dashmap);
+
+
+        let start = Instant::now();
+        let prepped_test = test_suite.iter()
+        .map(|expr| expr.0.evaluate_stage(&server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone()))
+        .collect::<Vec<_>>();
+
+        prepped_test.into_par_iter().for_each(|f| f());
+        println!("TIME TAKEN: {:?}", start.elapsed());
+
+        // Check if the result is in the out_hashmap
+        assert!(out_hashmap.contains_key(&mux_expr_0));
+        let result = out_hashmap.get(&mux_expr_0).unwrap();
+
+        // Assuming ServerKey::and() returns a new Ciphertext, we need to check if the result is correct
+        let expected_result = true;
+        assert_eq!(client_key.decrypt(result.value().as_ref().unwrap()), expected_result);
     }
 }

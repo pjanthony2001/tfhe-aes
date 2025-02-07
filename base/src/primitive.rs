@@ -1,6 +1,8 @@
+use dashmap::mapref::entry;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::Instant;
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::{RwLock, LazyLock};
@@ -254,7 +256,9 @@ impl FHEByte {
         println!("Hashset lengths {:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
 
         for i in 0..8 {
-            BooleanExpr::evaluate_hashset(&grouped_by_stage[i], &curr_data.clone(), server_key, visited.clone());
+            let start = Instant::now();
+            // BooleanExpr::evaluate_hashset(&grouped_by_stage[i], &curr_data.clone(), server_key, visited.clone());
+            println!("STAGE {:?} TIME {:?}", i, start.elapsed());
         }
 
         let data =
@@ -269,14 +273,20 @@ impl FHEByte {
                 })
                 .collect();
 
-        let mut stages= vec![0,0,0,0,0,0,0,0,0,0,0,0,0]; 
+        let mut stages= vec![0,0,0,0,0,0,0,0,0]; 
 
         for entry in visited.iter() {
-            stages[entry.key().stage() as usize] += 1;
+            match entry.key() {
+                BooleanExpr::Mux(_,_,_) => {stages[entry.key().stage() as usize] += 1;},
+                _=> {},
+            }
         }
+        
 
-        println!("STAGES {:?}", stages);
+        println!("STAGES {:?}, THEORETICAL_TIME: {:?}ms", stages,  stages.iter().map(|&x| ((x as f32) / 16_f32 ).ceil() * 30_f32  ).collect::<Vec<_>>());
         println!("TOTAL STAGES {:?}", visited.len());
+
+
         FHEByte { data }
     }
 
@@ -407,16 +417,13 @@ mod tests {
 
         let start = Instant::now();
 
-        let y: Vec<_> = with_server_key(|server_key| {
-            (0..1)
-                .into_par_iter()
-                .map_with(server_key, |server_key, _| x.sub_byte(server_key))
-                .collect()
+        let y = with_server_key(|server_key| {
+            x.sub_byte(server_key)  
         });
 
         println!("CONSUME_PARALLEL_ {:?}", start.elapsed() / 1);
 
-        assert_eq!(y[0].decrypt_to_u8(&client_key), 0x7c, "{:#x?}", y[0].decrypt_to_u8(&client_key));
+        assert_eq!(y.decrypt_to_u8(&client_key), 0x7c, "{:#x?}", y.decrypt_to_u8(&client_key));
     }
 
     fn clear_mul_x_gf2(x: &u8) -> u8 {

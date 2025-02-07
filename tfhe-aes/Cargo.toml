@@ -8,3 +8,4 @@ tfhe = { git = "https://github.com/zama-ai/tfhe-rs.git", rev = "4e2db92", featur
 base = { path = "../base/"}
 aes = "0.8.0"
 rayon = "1.0.0"
+dashmap = "6.0.0"
