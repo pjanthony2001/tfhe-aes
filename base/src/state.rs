@@ -4,7 +4,7 @@ use tfhe::boolean::prelude::*;
 use crate::Key;
 
 #[derive(Clone)]
-pub struct State {
+pub struct State { // This matrix is the transposed state matrix, and algorithms are implemented as such.
     data: [FHEByte; 16], // Each element of this array is the following in the transposed state matrix
                          // 0 4 8 12
                          // 1 5 9 13
@@ -13,13 +13,37 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(value: u128, client_key: &ClientKey) -> Self {
-        let data: [FHEByte; 16] = (0..16)
+    pub fn from_u128_enc(value: u128, client_key: &ClientKey) -> Self {
+        let mut data: [FHEByte; 16] = (0..16)
             .rev()
             .map(|i| FHEByte::from_u8_enc(&{ ((value >> 8 * i) & 0xFF) as u8 }, client_key))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
+
+        data.swap(1, 4);
+        data.swap(2, 8);
+        data.swap(3, 12);
+
+        data.swap(6, 9);
+        data.swap(7, 13);
+
+        data.swap(11, 14);
+
+        State { data }
+    }
+
+    pub fn from_u8_enc(data: &[u8; 16], client_key: &ClientKey) -> Self {
+        let mut data = data.map(|value| FHEByte::from_u8_enc(&value, client_key));
+        
+        data.swap(1, 4);
+        data.swap(2, 8);
+        data.swap(3, 12);
+
+        data.swap(6, 9);
+        data.swap(7, 13);
+
+        data.swap(11, 14);
 
         State { data }
     }
@@ -174,6 +198,7 @@ impl State {
     }
 
     pub fn xor_key_enc(&mut self, key: &Key, server_key: &ServerKey) {
+
         self.data.par_iter_mut()
         .zip(key.data.par_iter())
         .for_each_with(server_key, |server_key, (x, y)| {
@@ -182,28 +207,57 @@ impl State {
     }
 
     pub fn xor_key_clear(&mut self, key: &[u8; 16], server_key: &ServerKey) {
+        let mut key_data = key.clone();
+
+        key_data.swap(1, 4);
+        key_data.swap(2, 8);
+        key_data.swap(3, 12);
+
+        key_data.swap(6, 9);
+        key_data.swap(7, 13);
+
+        key_data.swap(11, 14);
+
         self.data.par_iter_mut()
-        .zip(key.into_par_iter())
+        .zip(key_data.into_par_iter())
         .for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(&FHEByte::trivial_clear(*y, server_key), server_key)
+            x.xor_in_place(&FHEByte::trivial_clear(y, server_key), server_key)
+        });
+    }
+
+    pub fn xor_state(&mut self, state: &State, server_key: &ServerKey) {
+        self.data.par_iter_mut()
+        .zip(state.data.par_iter())
+        .for_each_with(server_key, |server_key, (x, y)| {
+            x.xor_in_place(y, server_key)
         });
     }
 
     pub fn decrypt_to_u8(&self, client_key: &ClientKey) -> [u8; 16] {
-        self.data.iter().map(|x| (&x.decrypt(client_key))                .iter()
+        let mut decrypted_data: [u8; 16] = self.data.iter().map(|x| (&x.decrypt(client_key))                
+        .iter()
         .enumerate()
         .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
-        .sum()).collect::<Vec<_>>().try_into().unwrap()
+        .sum()).collect::<Vec<_>>().try_into().unwrap();
+
+        decrypted_data.swap(1, 4);
+        decrypted_data.swap(2, 8);
+        decrypted_data.swap(3, 12);
+
+        decrypted_data.swap(6, 9);
+        decrypted_data.swap(7, 13);
+
+        decrypted_data.swap(11, 14);
+
+        decrypted_data
     }
 
     pub fn decrypt_to_u128(&self, client_key: &ClientKey) -> u128 {
         let u8_data = self.decrypt_to_u8(client_key);
-        println!("{:#x?}", u8_data);
         let mut res: u128 = 0;
         for i in 0..15 {
             res ^= u8_data[i] as u128;
             res <<= 8;
-            println!("{:#x?}", res);
         }
 
         res ^= u8_data[15] as u128;
@@ -244,7 +298,7 @@ mod tests {
     fn test_mix_columns() {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
-        let state = State::new(0xd4e0b81e_bfb44127_5d521198_30aef1e5 , &client_key);
+        let state = State::from_u128_enc(0xd4e0b81e_bfb44127_5d521198_30aef1e5 , &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
         let start = Instant::now();
@@ -265,7 +319,7 @@ mod tests {
 fn test_sub_bytes() {
     let (client_key, server_key) = gen_keys();
     set_server_key(&server_key);
-    let state = State::new(0x19a09ae9_3df4c6f8_e3e28d48_be2b2a08, &client_key);
+    let state = State::from_u128_enc(0x19a09ae9_3df4c6f8_e3e28d48_be2b2a08, &client_key);
     let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
     let start = Instant::now();
@@ -286,7 +340,7 @@ fn test_sub_bytes() {
 fn test_shift_rows() {
     let (client_key, server_key) = gen_keys();
     set_server_key(&server_key);
-    let state = State::new(0x19a09ae9_3df4c6f8_e3e28d48_be2b2a08, &client_key);
+    let state = State::from_u128_enc(0x19a09ae9_3df4c6f8_e3e28d48_be2b2a08, &client_key);
     let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
     let start = Instant::now();
@@ -308,7 +362,7 @@ fn test_shift_rows() {
     fn test_inv_shift_rows() {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
-        let state = State::new(0xd4e0b81e_bfb44127_5d521198_30aef1e5, &client_key);
+        let state = State::from_u128_enc(0xd4e0b81e_bfb44127_5d521198_30aef1e5, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
     
         let start = Instant::now();
@@ -330,7 +384,7 @@ fn test_shift_rows() {
     fn test_inv_mix_columns() {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
-        let state = State::new(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
+        let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
     
         let start = Instant::now();
@@ -348,32 +402,12 @@ fn test_shift_rows() {
     
         }
 
-        #[test]
-        fn test_key_schedule() {
-            let (client_key, server_key) = gen_keys();
-            set_server_key(&server_key);
-            let state = State::new(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
-            let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
-        
-            let start = Instant::now();
-            with_server_key(|server_key| {
-                test_data
-                    .iter_mut()
-                    .for_each(|state| {
-                        state.xor_key_enc(&Key::from_u128_enc(0x01, &client_key), &server_key)
-                    })
-            });
-        
-            println!("{:#x?}", test_data[0].decrypt_to_u8(&client_key));
-            println!("TIME TAKEN {:?}", start.elapsed() / 1);
-        
-            }
 
         #[test]
         fn test_decrypt_u128() {
             let (client_key, server_key) = gen_keys();
             set_server_key(&server_key);
-            let state = State::new(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
+            let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
             
             assert_eq!(state.decrypt_to_u128(&client_key), 0x04e04828_66cbf806_8119d326_e59a7a4c, "{:#x?}", state.decrypt_to_u128(&client_key));
         

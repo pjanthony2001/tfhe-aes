@@ -4,12 +4,12 @@ use rayon::prelude::*;
 use std::sync::Arc;
 use std::time::Instant;
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{RwLock, LazyLock};
 use tfhe::boolean::prelude::*;
 use tfhe::boolean::server_key::*;
 
-use crate::boolean_tree::BooleanExpr;
+use crate::boolean_tree::{BooleanExpr, Operand, Runnable};
 use crate::sbox::*;
 
 
@@ -235,7 +235,6 @@ impl FHEByte {
 
     pub fn sub_byte(&self, server_key: &ServerKey) -> Self {
         //TODO: Do staged evaluation.
-        let visited = Arc::new(DashMap::new());
         let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
 
         let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
@@ -245,47 +244,56 @@ impl FHEByte {
             expr.to_hashset(&mut hashset);
         }
 
-        let mut grouped_by_stage: Vec<HashSet<BooleanExpr>> = vec![HashSet::new(); 8];
+        let mut grouped_by_stage: Vec<Vec<BooleanExpr>> = vec![Vec::new(); 8];
 
         // Iterate over each BooleanExpr and insert them into the appropriate HashSet based on their stage
         for expr in hashset {
             let stage = expr.stage() as usize;
-            grouped_by_stage[stage].insert(expr);
+            grouped_by_stage[stage].push(expr);
         }
 
-        println!("Hashset lengths {:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
+        // println!("Hashset lengths {:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
 
+        
+        let mut operands: HashMap<Operand, Ciphertext> = HashMap::new();
+        operands.insert(Operand::Bit0, curr_data[0].clone());
+        operands.insert(Operand::Bit1, curr_data[1].clone());
+        operands.insert(Operand::Bit2, curr_data[2].clone());
+        operands.insert(Operand::Bit3, curr_data[3].clone());
+        operands.insert(Operand::Bit4, curr_data[4].clone());
+        operands.insert(Operand::Bit5, curr_data[5].clone());
+        operands.insert(Operand::Bit6, curr_data[6].clone());
+        operands.insert(Operand::Bit7, curr_data[7].clone());
+
+        operands.insert(Operand::NotBit0, server_key.not(&curr_data[0]));
+        operands.insert(Operand::NotBit1, server_key.not(&curr_data[1]));
+        operands.insert(Operand::NotBit2, server_key.not(&curr_data[2]));
+        operands.insert(Operand::NotBit3, server_key.not(&curr_data[3]));
+        operands.insert(Operand::NotBit4, server_key.not(&curr_data[4]));
+        operands.insert(Operand::NotBit5, server_key.not(&curr_data[5]));
+        operands.insert(Operand::NotBit6, server_key.not(&curr_data[6]));
+        operands.insert(Operand::NotBit7, server_key.not(&curr_data[7]));
+
+        operands.insert(Operand::True, server_key.trivial_encrypt(true));
+        operands.insert(Operand::False, server_key.trivial_encrypt(false));
+
+
+        let start = Instant::now();
+        let mut hash_map: HashMap<BooleanExpr, Ciphertext> = HashMap::new();
         for i in 0..8 {
             let start = Instant::now();
-            // BooleanExpr::evaluate_hashset(&grouped_by_stage[i], &curr_data.clone(), server_key, visited.clone());
-            println!("STAGE {:?} TIME {:?}", i, start.elapsed());
+            hash_map.extend(grouped_by_stage[i].clone().into_iter()
+                .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .map_with(server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+                .collect::<HashMap<_, _>>().into_iter());    
+            // println!("STAGE {:?} TIME {:?}", i, start.elapsed());
         }
-
-        let data =
-            s_box_exprs
-                .iter()
-                .map(|x| {
-                    x.evaluate(
-                        &curr_data.clone(),
-                        server_key,
-                        Arc::clone(&visited),
-                    )
-                })
-                .collect();
-
-        let mut stages= vec![0,0,0,0,0,0,0,0,0]; 
-
-        for entry in visited.iter() {
-            match entry.key() {
-                BooleanExpr::Mux(_,_,_) => {stages[entry.key().stage() as usize] += 1;},
-                _=> {},
-            }
-        }
-        
-
-        println!("STAGES {:?}, THEORETICAL_TIME: {:?}ms", stages,  stages.iter().map(|&x| ((x as f32) / 16_f32 ).ceil() * 30_f32  ).collect::<Vec<_>>());
-        println!("TOTAL STAGES {:?}", visited.len());
-
+        // println!("TOTAL TIME {:?}", start.elapsed());
+        let data = s_box_exprs.iter()
+            .map(|expr| hash_map.get(expr).unwrap().clone()).collect();
+            
 
         FHEByte { data }
     }

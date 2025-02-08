@@ -553,13 +553,13 @@ impl Hash for BooleanExpr {
 }
 
 
-struct Runnable {
+pub struct Runnable {
     bool_expr: BooleanExpr,
     operands: Vec<Ciphertext>,
 }
 
 impl Runnable {
-    fn new(operands_: &HashMap<Operand, Ciphertext>, hashmap: &HashMap<BooleanExpr, Ciphertext>, bool_expr: BooleanExpr) -> Self {
+    pub fn new(operands_: &HashMap<Operand, Ciphertext>, hashmap: &HashMap<BooleanExpr, Ciphertext>, bool_expr: BooleanExpr) -> Self {
         let mut operands: Vec<_> = Vec::with_capacity(3);
 
         match &bool_expr {
@@ -585,13 +585,13 @@ impl Runnable {
 
         Self {bool_expr, operands: operands.try_into().unwrap()}
     }
-    fn run(&self, server_key: &ServerKey) -> Ciphertext {
+    pub fn run(&self, server_key: &ServerKey) -> Ciphertext {
         match self.bool_expr {
             BooleanExpr::Operand(_) => self.operands[0].clone(),
             BooleanExpr::And(_, _) => server_key.and(&self.operands[0], &self.operands[1]),
             BooleanExpr::Or(_, _) => server_key.or(&self.operands[0], &self.operands[1]),
             BooleanExpr::Xor(_, _) => server_key.xor(&self.operands[0], &self.operands[1]),
-            BooleanExpr::Mux(_, _, _) => server_key.mux(&self.operands[0], &self.operands[1], &self.operands[1]),
+            BooleanExpr::Mux(_, _, _) => server_key.mux(&self.operands[0], &self.operands[1], &self.operands[2]),
         }
     }
 }
@@ -952,24 +952,23 @@ pub mod tests {
         // Setup server key and operands
         let (client_key, server_key) = gen_keys();
         // Assuming ServerKey has a new() method
-        let operands = Arc::new(DashMap::with_shard_amount(32));
-        let mut inc_hashmap = Arc::new(DashMap::with_shard_amount(32));
-        let mut out_hashmap = Arc::new(DashMap::with_shard_amount(32));
+        let mut operands = HashMap::new();
 
         // Create some dummy Ciphertext values
-        let bit0 = client_key.encrypt(true);// Assuming Ciphertext has a new() method
+        let bit0 = client_key.encrypt(true);
         let bit1 = client_key.encrypt(false);
         let bit2 = client_key.encrypt(true);
         let bit3 = client_key.encrypt(false);
         // Insert operands and intermediate values into the hashmaps
 
-        operands.insert(Operand::Bit0, bit0);
-        operands.insert(Operand::Bit1, bit1);
-        operands.insert(Operand::Bit2, bit2);
-        operands.insert(Operand::Bit3, bit3);
+        operands.insert(Operand::Bit0, bit0.clone());
+        operands.insert(Operand::Bit1, bit1.clone());
+        operands.insert(Operand::Bit2, bit2.clone());
+        operands.insert(Operand::Bit3, bit3.clone());
 
-        let expr1 = BooleanExpr::Operand(Operand::Bit0);
-        let expr2 = BooleanExpr::Operand(Operand::Bit1);
+        let expr1 = BooleanExpr::Operand(Operand::Bit1);
+        let expr2 = BooleanExpr::Operand(Operand::Bit2);
+    
         let and_expr = BooleanExpr::And(Box::new(expr1.clone()), Box::new(expr2.clone()));
         let or_expr = BooleanExpr::Or(Box::new(expr1.clone()), Box::new(expr2.clone()));
         let xor_expr = BooleanExpr::Xor(Box::new(expr1.clone()), Box::new(expr2.clone()));
@@ -982,46 +981,77 @@ pub mod tests {
         let mux_expr_6 = BooleanExpr::Mux(Operand::Bit2, Box::new(expr2.clone()), Box::new(expr1.clone()));
         let mux_expr_7 = BooleanExpr::Mux(Operand::Bit3, Box::new(expr2.clone()), Box::new(expr1.clone()));
 
-        let test_suite  = [(expr1.clone(), None), (expr2.clone(), None)];
-
-        let mut dashmap = DashMap::with_shard_amount(32);
-        dashmap.extend(test_suite.clone());
-
-        out_hashmap = Arc::new(dashmap);
+        let test_suite: [BooleanExpr; 2] = [expr1.clone(), expr2.clone()];
 
         let start = Instant::now();
+        let mut hash_map: HashMap<BooleanExpr, Ciphertext> = HashMap::new();
+        hash_map = test_suite.into_iter()
+            .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map_with(&server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+            .collect::<HashMap<_, _>>();
 
-        [expr1, expr2].par_iter().for_each_with(&server_key, |server_key, expr| {
-            expr.evaluate_stage(server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone());
-        });
+    
+        println!("TIME TAKEN: {:?}", start.elapsed());
+
+
+        let stage_1: [BooleanExpr; 128] = 
+        [
+        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
+        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
+        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
+        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone()];
+
+        let start = Instant::now();
+        let stage_3 = stage_1.into_iter()
+            .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
+            .collect::<Vec<_>>();
+
+        println!("TIME TAKEN: {:?}", start.elapsed());
+        let start = Instant::now();
+
+        hash_map = stage_3.into_par_iter()
+            .map_with(&server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+            .collect::<HashMap<_, _>>();
 
         println!("TIME TAKEN: {:?}", start.elapsed());
 
-        // Evaluate the AND expression
-        inc_hashmap = out_hashmap;
-        
-        let test_suite: [(BooleanExpr, Option<Ciphertext>); 8] = [(mux_expr_0.clone(), None), (mux_expr_1.clone(), None), (mux_expr_2.clone(), None), (mux_expr_3.clone(), None), (mux_expr_4.clone(), None), (mux_expr_5.clone(), None), (mux_expr_6.clone(), None), (mux_expr_7.clone(), None)];
+        let decrypt_0 = client_key.decrypt(&bit0);
+        let decrypt_1 = client_key.decrypt(&bit1);
+        let decrypt_2 = client_key.decrypt(&bit2);
+        let decrypt_3 = client_key.decrypt(&bit3);
 
-        let mut dashmap = DashMap::with_shard_amount(32);
-        dashmap.extend(test_suite.clone());
-
-        out_hashmap = Arc::new(dashmap);
-
-
-        let start = Instant::now();
-        let prepped_test = test_suite.iter()
-        .map(|expr| expr.0.evaluate_stage(&server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone()))
-        .collect::<Vec<_>>();
-
-        prepped_test.into_par_iter().for_each(|f| f());
-        println!("TIME TAKEN: {:?}", start.elapsed());
 
         // Check if the result is in the out_hashmap
-        assert!(out_hashmap.contains_key(&mux_expr_0));
-        let result = out_hashmap.get(&mux_expr_0).unwrap();
+        assert!(hash_map.contains_key(&mux_expr_0));
+        let result = hash_map.get(&mux_expr_0).unwrap();
+        let expected_result = (decrypt_0 & decrypt_1) | ((!decrypt_0) & decrypt_2);
+        assert_eq!(client_key.decrypt(result), expected_result);
 
-        // Assuming ServerKey::and() returns a new Ciphertext, we need to check if the result is correct
-        let expected_result = true;
-        assert_eq!(client_key.decrypt(result.value().as_ref().unwrap()), expected_result);
+        assert!(hash_map.contains_key(&mux_expr_1));
+        let result = hash_map.get(&mux_expr_1).unwrap();
+        let expected_result = (decrypt_1 & decrypt_1) | (!decrypt_1 & decrypt_2);
+        assert_eq!(client_key.decrypt(result), expected_result);
+
+        assert!(hash_map.contains_key(&mux_expr_2));
+        let result = hash_map.get(&mux_expr_2).unwrap();
+        let expected_result = (decrypt_2 & decrypt_1) | (!decrypt_2 & decrypt_2);
+        assert_eq!(client_key.decrypt(result), expected_result);
+
+        assert!(hash_map.contains_key(&mux_expr_3));
+        let result = hash_map.get(&mux_expr_3).unwrap();
+        let expected_result = (decrypt_3 & decrypt_1) | (!decrypt_3 & decrypt_2);
+        assert_eq!(client_key.decrypt(result), expected_result);
+
+        assert!(hash_map.contains_key(&mux_expr_4));
+        let result = hash_map.get(&mux_expr_4).unwrap();
+        let expected_result = (decrypt_0 & decrypt_2) | (!decrypt_0 & decrypt_1);
+        assert_eq!(client_key.decrypt(result), expected_result);
+
+        assert!(hash_map.contains_key(&mux_expr_5));
+        let result = hash_map.get(&mux_expr_5).unwrap();
+        let expected_result = (decrypt_1 & decrypt_2) | (!decrypt_1 & decrypt_1);
+        assert_eq!(client_key.decrypt(result), expected_result);
     }
 }
