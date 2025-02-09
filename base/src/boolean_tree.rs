@@ -1,13 +1,8 @@
 use dashmap::DashMap;
-use rand::seq::index::IndexVec;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use tfhe::boolean::backward_compatibility::server_key;
-use core::hash;
 use std::hash::{Hash, Hasher};
 use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::sync::Arc;
-use std::time::Instant;
 use tfhe::boolean::prelude::*;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -591,7 +586,6 @@ pub mod tests {
 
     use super::*;
     use tfhe::boolean::gen_keys;
-    use tfhe::boolean::prelude::*;
     use rayon::prelude::*;
 
     pub fn bool_to_ciphertext(booleans: &[bool], client_key: &ClientKey) -> Vec<Ciphertext> {
@@ -826,6 +820,7 @@ pub mod tests {
         }
     }
 
+    #[test]
     fn test_evaluate_level_1() {
         let (client_key, server_key) = gen_keys();
 

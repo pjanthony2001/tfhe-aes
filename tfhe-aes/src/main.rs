@@ -6,7 +6,7 @@ use base::{Key, State};
 use modes::{ecb::ECB, cbc::CBC, ctr::CTR, ofb::OFB};
 use clap::Parser;
 use hex;
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit, KeyInit, StreamCipher, generic_array::GenericArray, BlockEncrypt};
+use aes::cipher::{KeyInit, generic_array::GenericArray, BlockEncrypt};
 use aes::Aes128;
 use rand::Rng;
 use tfhe::boolean::gen_keys;

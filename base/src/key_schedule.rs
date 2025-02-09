@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 
@@ -106,7 +104,7 @@ impl Key {
         .par_chunks_mut(2)
         .enumerate()
         .filter(|(i, _)| i % 2 == 0)
-        .for_each_with(server_key, |server_key, (i, x)| {
+        .for_each_with(server_key, |server_key, (_, x)| {
             let (a, b) = x.split_at_mut(1);
             b[0].xor_in_place(&a[0], server_key)
         });
@@ -115,7 +113,7 @@ impl Key {
         .par_chunks_mut(2)
         .enumerate()
         .filter(|(i, _)| i % 2 == 0)
-        .for_each_with(server_key, |server_key, (i, x)| {
+        .for_each_with(server_key, |server_key, (_, x)| {
             let (a, b) = x.split_at_mut(1);
             b[0].xor_in_place(&a[0], server_key)
         });
@@ -124,7 +122,7 @@ impl Key {
         .par_chunks_mut(2)
         .enumerate()
         .filter(|(i, _)| i % 2 == 1)
-        .for_each_with(server_key, |server_key, (i, x)| {
+        .for_each_with(server_key, |server_key, (_, x)| {
             let (a, b) = x.split_at_mut(1);
             b[0].xor_in_place(&a[0], server_key)
         });

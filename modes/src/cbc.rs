@@ -1,5 +1,4 @@
 use base::*;
-use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 use crate::ecb::ECB;  
 

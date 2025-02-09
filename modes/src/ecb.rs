@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use base::*;
 use tfhe::boolean::prelude::*;
 
@@ -61,6 +59,7 @@ impl ECB {
 mod tests {
 
     use super::*;
+    use std::time::Instant;
     use tfhe::boolean::gen_keys;
     use base::primitive::*;
 

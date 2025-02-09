@@ -13,12 +13,12 @@ use crate::ecb::ECB;
 pub struct CTR {
     ecb: ECB,
     counters: Vec<State>,
-    n: u8
 }
 
 impl CTR {
     pub fn new(keys: &[Key], counters: &[State], n: u8) -> Self {
-        CTR { ecb: ECB::new(keys), counters: counters.to_vec(), n }
+        assert!(counters.len() == n as usize);
+        CTR { ecb: ECB::new(keys), counters: counters.to_vec()}
     }
 
     pub fn encrypt(&self, plaintext: &mut [State], server_key: &ServerKey) {
