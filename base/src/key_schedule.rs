@@ -6,6 +6,9 @@ use crate::sbox::*;
 
 const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
 
+/// This represents a key in AES-128. The key is represented in a transposed manner, and all algorithms are implemented as such.
+/// For more details for each algorithm, refer to the [Efficient Implementation of AES in 32 bit systems](https://link.springer.com/content/pdf/10.1007/3-540-36400-5_13.pdf) paper.
+
 #[derive(Clone, Debug)]
 pub struct Key {
     pub data: [FHEByte; 16],
@@ -20,6 +23,7 @@ impl Key {
             .try_into()
             .unwrap();
 
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -40,6 +44,7 @@ impl Key {
             .try_into()
             .unwrap();
 
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -55,6 +60,7 @@ impl Key {
     pub fn from_u8_enc(data: &[u8; 16], client_key: &ClientKey) -> Self {
         let mut data = data.map(|value| FHEByte::from_u8_enc(&value, client_key));
 
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -69,6 +75,7 @@ impl Key {
     pub fn from_u8_clear(data: &[u8; 16], server_key: &ServerKey) -> Self {
         let mut data = data.map(|value| FHEByte::from_u8_clear(&value, server_key));
 
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -138,6 +145,7 @@ impl Key {
             .try_into()
             .unwrap();
 
+        // TRANSPOSE OUTPUT DATA
         decrypted_data.swap(1, 4);
         decrypted_data.swap(2, 8);
         decrypted_data.swap(3, 12);
@@ -150,6 +158,7 @@ impl Key {
         decrypted_data
     }
 
+    /// This method performs the key expansion for the given key in the FHE context, and returns all keys as an array of 11 keys.
     pub fn generate_round_keys(&self, server_key: &ServerKey) -> [Key; 11] {
         let mut keys = vec![self.clone()];
         for i in 0..10 {
@@ -170,6 +179,7 @@ fn rot_word(word: &[u8; 4]) -> [u8; 4] {
     [word[1], word[2], word[3], word[0]]
 }
 
+/// This method performs the key expansion for the given key in the clear, and returns all keys as an array of 11 keys.
 pub fn key_expansion_clear(key: &[u8; 16]) -> [[u8; 16]; 11] {
     let mut round_keys = [[0u8; 16]; 11];
 
@@ -210,16 +220,14 @@ mod tests {
     #[test]
     fn test_key_schedule() {
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let key = Key::from_u128_enc(0x2b7e151628aed2a6abf7158809cf4f3c, &client_key);
 
         let start = Instant::now();
-        with_server_key(|server_key| {
-            let keys = key.generate_round_keys(server_key);
-            for key in keys.iter() {
-                println!("{:#x?}", key.decrypt_to_u8(&client_key));
-            }
-        });
+
+        let keys = key.generate_round_keys(&server_key);
+        for key in keys.iter() {
+            println!("{:#x?}", key.decrypt_to_u8(&client_key));
+        }
 
         println!("TIME TAKEN {:?}", start.elapsed() / 1);
     }
@@ -235,5 +243,31 @@ mod tests {
         for key in round_keys.iter() {
             println!("{:#x?}", key);
         }
+    }
+
+    #[test]
+    fn test_conversion_u8_u128() {
+        let (client_key, _) = gen_keys();
+        let key_data = [
+            0x04, 0xe0, 0x48, 0x28, 0x66, 0xcb, 0xf8, 0x06, 0x81, 0x19, 0xd3, 0x26, 0xe5, 0x9a,
+            0x7a, 0x4c,
+        ];
+        let key = Key::from_u8_enc(&key_data, &client_key);
+
+        assert_eq!(
+            key.decrypt_to_u8(&client_key),
+            key_data,
+            "{:#?}",
+            key.decrypt_to_u8(&client_key)
+        );
+
+        let key = Key::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
+
+        assert_eq!(
+            key.decrypt_to_u8(&client_key),
+            key_data,
+            "{:#?}",
+            key.decrypt_to_u8(&client_key)
+        );
     }
 }

@@ -6,7 +6,8 @@ use tfhe::boolean::prelude::*;
 /// CTR mode is the counter mode for AES-128
 ///
 /// As there is no way to randomly generate the counter in the FHE context, we have to pass it as an argument.
-/// As such, we generate the counters, encrypt, and then pass them to the CTR.
+/// As such, we generate the counters, encrypt in the FHE context, and then pass them to the CTR. In a client server context,
+/// the client would generate the counters, serialize them, and send them to the server. The server would then deserialize them and use them to create the CTR object.
 
 pub struct CTR {
     ecb: ECB,
@@ -57,7 +58,6 @@ mod tests {
     #[test]
     fn test_ctr() {
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
 
         let curr_key = Key::from_u128_enc(0x2b7e1516_28aed2a6a_bf71588_09cf4f3c, &client_key);
         let keys = curr_key.generate_round_keys(&server_key);
@@ -74,15 +74,11 @@ mod tests {
         let mut plaintext = vec![plaintext_block_0, plaintext_block_1];
 
         let start = Instant::now();
-        with_server_key(|server_key| {
-            ctr.encrypt(&mut plaintext, &server_key);
-        });
+        ctr.encrypt(&mut plaintext, &server_key);
         println!("ENCRYPT TIME TAKEN {:?}", start.elapsed());
 
         let start = Instant::now();
-        with_server_key(|server_key| {
-            ctr.decrypt(&mut plaintext, &server_key);
-        });
+        ctr.decrypt(&mut plaintext, &server_key);
         println!("DECRYPT TIME TAKEN {:?}", start.elapsed());
 
         assert_eq!(

@@ -155,6 +155,7 @@ fn test_ecb(
     encrypted_blocks
         .iter_mut()
         .for_each(|x| ecb.encrypt(x, server_key)); // Encrypt with AES
+
     println!(
         "AES of #{:?} outputs computed in: {:?}",
         blocks.len(),
@@ -407,7 +408,7 @@ fn key_expansion(
         let clear_keys = key_expansion_clear(key);
         array::from_fn(|i| Key::from_u8_enc(&clear_keys[i], client_key))
     } else {
-        let curr_key = Key::from_u128_enc(u128::from_le_bytes(*key), client_key);
+        let curr_key = Key::from_u8_enc(key, client_key);
         curr_key.generate_round_keys(server_key)
     };
 

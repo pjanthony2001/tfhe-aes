@@ -3,9 +3,11 @@ use crate::primitive::*;
 use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 
+/// This represents the state of a 128-bit block in AES-128. The matrix is represented in a transposed manner, and all algorithms are implemented as such.
+/// For more details for each algorithm, refer to the [Efficient Implementation of AES in 32 bit systems](https://link.springer.com/content/pdf/10.1007/3-540-36400-5_13.pdf) paper.
 #[derive(Clone)]
 pub struct State {
-    // This matrix is the transposed state matrix, and algorithms are implemented as such.
+    // This matrix is the transposed state matrix.
     data: [FHEByte; 16],
 }
 
@@ -313,8 +315,6 @@ impl State {
 #[cfg(test)]
 
 mod tests {
-    use std::time::Instant;
-
     use super::*;
     use tfhe::boolean::gen_keys;
 
@@ -341,7 +341,6 @@ mod tests {
     fn test_sub_bytes() {
         // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0x193de3be_a0f4e22b_9ac68d2a_e9f84808, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
@@ -362,7 +361,6 @@ mod tests {
     fn test_inv_sub_bytes() {
         // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
@@ -383,7 +381,6 @@ mod tests {
     fn test_shift_rows() {
         // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
@@ -404,7 +401,6 @@ mod tests {
     fn test_inv_shift_rows() {
         // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
@@ -443,12 +439,38 @@ mod tests {
 
     #[test]
     fn test_decrypt_u128() {
-        let (client_key, server_key) = gen_keys();
+        let (client_key, _) = gen_keys();
         let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
 
         assert_eq!(
             state.decrypt_to_u128(&client_key),
             0x04e04828_66cbf806_8119d326_e59a7a4c,
+            "{:#x?}",
+            state.decrypt_to_u128(&client_key)
+        );
+    }
+
+    #[test]
+    fn test_conversion_u8_u128() {
+        let (client_key, _) = gen_keys();
+        let state_data = [
+            0x04, 0xe0, 0x48, 0x28, 0x66, 0xcb, 0xf8, 0x06, 0x81, 0x19, 0xd3, 0x26, 0xe5, 0x9a,
+            0x7a, 0x4c,
+        ];
+        let state = State::from_u8_enc(&state_data, &client_key);
+
+        assert_eq!(
+            state.decrypt_to_u128(&client_key),
+            0x04e04828_66cbf806_8119d326_e59a7a4c,
+            "{:#x?}",
+            state.decrypt_to_u128(&client_key)
+        );
+
+        let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
+
+        assert_eq!(
+            state.decrypt_to_u8(&client_key),
+            state_data,
             "{:#x?}",
             state.decrypt_to_u128(&client_key)
         );

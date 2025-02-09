@@ -2,8 +2,7 @@ use std::collections::HashSet;
 
 use crate::boolean_tree::*;
 
-//TODO: FIX ALL THE MULTIPLE REVERSING.
-
+/// The S-Box used in AES encryption
 pub const S_BOX_DATA: [u8; 256] = [
     0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
     0xCA, 0x82, 0xC9, 0x7D, 0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0,
@@ -23,6 +22,7 @@ pub const S_BOX_DATA: [u8; 256] = [
     0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16,
 ];
 
+/// The inverse S-Box used in AES decryption
 pub const INV_S_BOX_DATA: [u8; 256] = [
     0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
     0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -49,6 +49,7 @@ fn bit_x_s_box(data: [u8; 256], position: u8) -> Vec<bool> {
         .collect()
 }
 
+/// Generates the reduced Boolean expressions for the S-Box or the Inv S-Box
 pub fn generate_reduced_bool_expr(data: [u8; 256]) -> Vec<BooleanExpr> {
     (0..8)
         .rev()
@@ -60,6 +61,7 @@ pub fn generate_reduced_bool_expr(data: [u8; 256]) -> Vec<BooleanExpr> {
 }
 
 pub fn stage_exprs(data: [u8; 256]) -> Vec<HashSet<BooleanExpr>> {
+    // Depreciated method, used for testing purposes
     let s_box_exprs = generate_reduced_bool_expr(data);
     let mut hashset: HashSet<BooleanExpr> = HashSet::new();
 
@@ -75,7 +77,6 @@ pub fn stage_exprs(data: [u8; 256]) -> Vec<HashSet<BooleanExpr>> {
         grouped_by_stage[stage].insert(expr);
     }
 
-    // println!("{:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
     grouped_by_stage
 }
 
@@ -107,6 +108,7 @@ mod tests {
             .collect()
     }
 
+    // This test tests ALL the S-Box values and as such takes a considerable amount of time, do not run this test unless necessary
     #[test]
     fn test_all_sbox() {
         let x = generate_reduced_bool_expr(S_BOX_DATA);
@@ -134,6 +136,7 @@ mod tests {
         })
     }
 
+    // This test tests ALL the Inv S-Box values and as such takes a considerable amount of time, do not run this test unless necessary
     #[test]
     fn test_all_inv_sbox() {
         let x = generate_reduced_bool_expr(INV_S_BOX_DATA);

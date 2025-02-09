@@ -3,8 +3,6 @@ use base::*;
 use tfhe::boolean::prelude::*;
 
 /// CBC mode is the Cipher Block Chaining mode for AES-128
-///
-///
 
 pub struct CBC {
     ecb: ECB,
@@ -56,7 +54,6 @@ mod tests {
     #[test]
     fn test_cbc() {
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
 
         let curr_key = Key::from_u128_enc(0x2b7e1516_28aed2a6a_bf71588_09cf4f3c, &client_key);
         let keys = curr_key.generate_round_keys(&server_key);
@@ -70,9 +67,7 @@ mod tests {
         let mut plaintext = vec![plaintext_block_0, plaintext_block_1];
 
         let start = Instant::now();
-        with_server_key(|server_key| {
-            cbc.encrypt(&mut plaintext, &server_key);
-        });
+        cbc.encrypt(&mut plaintext, &server_key);
         println!("ENCRYPT TIME TAKEN {:?}", start.elapsed());
 
         plaintext
@@ -80,9 +75,7 @@ mod tests {
             .for_each(|x| println!("{:#x?}", x.decrypt_to_u128(&client_key)));
 
         let start = Instant::now();
-        with_server_key(|server_key| {
-            cbc.decrypt(&mut plaintext, &server_key);
-        });
+        cbc.decrypt(&mut plaintext, &server_key);
         println!("DECRYPT TIME TAKEN {:?}", start.elapsed());
 
         assert_eq!(

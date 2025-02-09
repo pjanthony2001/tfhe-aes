@@ -5,6 +5,12 @@ use std::ops::Not;
 use std::sync::Arc;
 use tfhe::boolean::prelude::*;
 
+/// This struct represents the operands that can be used in the BooleanExpr
+///
+/// As we construct the boolean-tree from only True and False as the base operands, the final boolean expression will contain only True and False
+/// and the selector bits (Bit0, Bit1, Bit2, Bit3, Bit4, Bit5, Bit6, Bit7) and their negations.
+///
+/// As operands form the leaves of the boolean expression tree, they are of stage value 0.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum Operand {
     True,
@@ -65,6 +71,7 @@ impl From<bool> for Operand {
 
 impl Operand {
     fn evaluate(&self, bits: &[Ciphertext], server_key: &ServerKey) -> Ciphertext {
+        //depreciated method, used for testing purposes
         match self {
             Operand::True => server_key.trivial_encrypt(true),
             Operand::False => server_key.trivial_encrypt(false),
@@ -92,6 +99,25 @@ impl Operand {
     }
 }
 
+/// This struct represents the boolean expression tree
+///
+/// The tree is constructed from the base operands as introduced earlier and the logical operators (And, Or, Xor, Mux)
+/// The boolean expressions are ordered:
+///
+/// For example, the expression (A AND B) is equivalent to (B AND A) and as such only one of these should be stored (for hashing purposes).
+/// The one to keep is dependant on the ordering of the operands (if A > B or A < B). The same is done for XOR and OR.
+///
+/// Next, the expression (!A AND !B) is equivalent to !(A OR B) and as such we keep the former, prioritizing the negation of operands than the negation of the whole expression.
+/// We then propagate the negation down the tree, ordering the operands as we go. As such the entire structure will be unique.
+/// This same negation propagation is done for the Mux operator as well as !MUX(A, B, C) is equivalent to MUX(A, !B, !C).
+///
+/// The structure of the selector bits ensures that for a MUX(A, B, C), A is always a non-negated operand.
+///
+/// Stages are also calculated as the height of a node in the tree
+///
+/// All of the above ensures that we can hash a boolean expression to be looked up in a truth table. Then, we can evaluate the expression in a staged manner, ensuring
+/// that we only evaluate the expression once for each unique sub-expression.
+///
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BooleanExpr {
     Operand(Operand),
@@ -118,6 +144,7 @@ impl Not for BooleanExpr {
 }
 
 impl BooleanExpr {
+    // This function reduces the number of MUX in the expression tree if for MUX(A, B, C), B == true
     fn mux_left_true(mux: &Operand, right: &BooleanExpr) -> BooleanExpr {
         match right {
             BooleanExpr::Operand(Operand::True) => BooleanExpr::Operand(Operand::True),
@@ -126,6 +153,7 @@ impl BooleanExpr {
         }
     }
 
+    // This function reduces the number of MUX in the expression tree if for MUX(A, B, C), B == false
     fn mux_left_false(mux: &Operand, right: &BooleanExpr) -> BooleanExpr {
         match right {
             BooleanExpr::Operand(Operand::True) => BooleanExpr::Operand(!*mux),
@@ -134,6 +162,7 @@ impl BooleanExpr {
         }
     }
 
+    // This function reduces the number of MUX in the expression tree if for MUX(A, B, C), B == X
     fn mux_left_x(mux: &Operand, left: &BooleanExpr, right: &BooleanExpr) -> BooleanExpr {
         match right {
             BooleanExpr::Operand(Operand::True) => Self::mux_left_true(&!*mux, left),
@@ -146,6 +175,7 @@ impl BooleanExpr {
         }
     }
 
+    // This function reduces the number of MUX in the expression tree
     fn mux(mux: &Operand, left: &BooleanExpr, right: &BooleanExpr) -> BooleanExpr {
         match left {
             BooleanExpr::Operand(Operand::True) => Self::mux_left_true(mux, right),
@@ -177,6 +207,7 @@ impl BooleanExpr {
         BooleanExpr::Or(Box::new(left), Box::new(right))
     }
 
+    // This function reduces the number of MUX in the expression tree by calling the functions mux (mux_left_true, mux_left_false and mux_left_x) above
     pub fn reduce_mux(items: &Vec<BooleanExpr>) -> BooleanExpr {
         assert!(
             items.len() & (items.len() - 1) == 0,
@@ -220,6 +251,7 @@ impl BooleanExpr {
     }
 
     pub fn evaluate(
+        // Depreciated method, used for testing purposes
         &self,
         bits: &[Ciphertext],
         server_key: &ServerKey,
@@ -264,6 +296,7 @@ impl BooleanExpr {
     }
 
     pub fn stage(&self) -> u8 {
+        // Helps calculate the height of a node in the tree, thus giving their stage
         match self {
             BooleanExpr::Operand(op) => op.stage(),
             BooleanExpr::And(lhs, rhs) => std::cmp::max(lhs.stage(), rhs.stage()) + 1,
@@ -300,6 +333,7 @@ impl BooleanExpr {
 
     #[inline(always)]
     pub fn evaluate_stage<'a>(
+        // Depreciated method, used for testing purposes
         &'a self,
         server_key: &'a ServerKey,
         operands: Arc<DashMap<Operand, Ciphertext>>,
@@ -406,6 +440,7 @@ impl BooleanExpr {
 
     #[inline(always)]
     pub fn evaluate_stage_return(
+        // Depreicated method, used for testing purposes
         &self,
         server_key: &ServerKey,
         operands: Arc<DashMap<Operand, Ciphertext>>,
@@ -565,6 +600,8 @@ impl Hash for BooleanExpr {
     }
 }
 
+/// This struct allows us to evaluate a boolean expression in a staged manner by encapsulating 2-3 Cipertexts in a Vec and then
+/// allowing rayon to evaluate the expression in parallel.
 pub struct Runnable {
     bool_expr: BooleanExpr,
     operands: Vec<Ciphertext>,
@@ -929,7 +966,6 @@ pub mod tests {
     fn test_evaluate_level_7() {
         let (client_key, server_key) = gen_keys();
         let truth_tables = vec![u256_to_bool(23456789 as u128, 234567 as u128, 256 as usize)];
-        println!("Hello");
         for truth_table in truth_tables {
             let expr = BooleanExpr::from_bool_vec(&truth_table);
             let result_expr = BooleanExpr::reduce_mux(&expr);

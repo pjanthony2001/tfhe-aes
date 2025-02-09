@@ -29,7 +29,7 @@ The sub-bytes operation is the main source of performance cost for the AES-imple
 We then simplified this 'BooleanExpr' using the `reduce_mux` method, which simplifies tautologies (such as mux(condition, true, true) = true) and other standard expressions. The simplification of the expressions are done in an ordered manner so that each `BooleanExpr` is uniquely hashable.
 
 ### **Staging**
-This ability to uniquely hash the `BooleanExpr` is useful in the next step: staged evaluation. As there are many repeated expressions in the 8 final `BooleanExpr` (one for each bit), we can simplify the evaluation by staging it (based on the height of the node), and then using a hashmap to keep a set of expressions that we have already evaluated. To further optimize the performance, the relevant `Ciphertext` objects are retrieved from the `HashMap`, and encapsulated into a `Runnable` object which `rayon` can manage among the thread pool. 
+This ability to uniquely hash the `BooleanExpr` is useful in the next step: staged evaluation. As there are many repeated expressions in the 8 final `BooleanExpr` (one for each bit), we can simplify the evaluation by staging it (based on the height of the node), and then using a hashmap to keep a set of expressions that we have already evaluated. To further optimize the performance, the relevant `Ciphertext` objects are retrieved from the `HashMap`, and encapsulated into a `Runnable` object which `rayon` can manage among the thread pool. This reduced the computation from ~2.s to 1.6s per byte.
 
 However, this optimization seems to have hit an internal bottleneck, as we observe about half the speed as it should achieve, averaging around 1.6s per byte substitution on a 16-thread machine, where the optimal performance should be <1s.
 
@@ -137,3 +137,29 @@ cargo run --release -- -i "00112233445566778899AABBCCDDEEFF" -k "0F1571C947D9E85
 This enables **offline key expansion**.
 
 ---
+
+# Configuration and Testing
+
+---
+
+## Rust configuration
+Currently, the cargo workspace file has the following profile:
+
+```
+[profile.release]
+debug = true
+opt-level = 2
+```
+
+## tfhe-rs 
+Currently, the cargo files of the different crates has the following profile:
+
+```
+tfhe = { git = "https://github.com/zama-ai/tfhe-rs.git", rev = "4e2db92", features = ["integer", "nightly-avx512", "noise-asserts", "boolean"]}
+```
+
+---
+
+## Testing
+
+It is recommended that all tests are run for each module separately, as some modules tests take much longer to run (in particular `sbox`, and all the modules in the `modes` crate)
