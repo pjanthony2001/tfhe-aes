@@ -344,14 +344,12 @@ fn test_shift_rows() {
     let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
     let start = Instant::now();
-    with_server_key(|server_key| {
-        test_data
+    test_data
             .par_iter_mut()
-            .map_with(server_key, |server_key, state| {
+            .map(| state| {
                 state.shift_rows()
             })
-            .collect::<Vec<_>>()
-    });
+            .collect::<Vec<_>>();
 
     println!("{:#x?}", test_data[0].decrypt_to_u8(&client_key));
     println!("TIME TAKEN {:?}", start.elapsed() / 1);
@@ -366,14 +364,14 @@ fn test_shift_rows() {
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
     
         let start = Instant::now();
-        with_server_key(|server_key| {
-            test_data
+
+        test_data
                 .par_iter_mut()
-                .map_with(server_key, |server_key, state| {
+                .map(|state| {
                     state.inv_shift_rows()
                 })
                 .collect::<Vec<_>>()
-        });
+        ;
     
         println!("{:#x?}", test_data[0].decrypt_to_u8(&client_key));
         println!("TIME TAKEN {:?}", start.elapsed() / 1);
