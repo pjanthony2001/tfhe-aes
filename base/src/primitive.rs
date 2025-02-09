@@ -13,9 +13,9 @@ use crate::boolean_tree::{BooleanExpr, Operand, Runnable};
 use crate::sbox::*;
 
 
-    pub static INTERNAL_KEY: RwLock<Option<ServerKey>> = const { RwLock::new(None) };
-    pub static S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(S_BOX_DATA)));
-    pub static INV_S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(INV_S_BOX_DATA)));
+pub static INTERNAL_KEY: RwLock<Option<ServerKey>> = const { RwLock::new(None) };
+pub static S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(S_BOX_DATA)));
+pub static INV_S_BOX_EXPR: RwLock<LazyLock<Vec<BooleanExpr>>> = RwLock::new(LazyLock::new(||generate_reduced_bool_expr(INV_S_BOX_DATA)));
 
 pub fn set_server_key(key: &ServerKey) {
     let mut guard_internal_key = INTERNAL_KEY.write().unwrap();
@@ -40,9 +40,14 @@ where
 
 }
 
+/// FHEByte is a struct that represents a byte in the FHE context
+/// 
+/// The FHEByte struct is a wrapper around a VecDeque of boolean Ciphertexts.
+/// This byte is in Big Endian format and implements multiple bit manipulation operations.
+/// The FHEByte also implements the multiplication by x in GF(2^8) operation, as is required by the mix columns operation.
+
 #[derive(Clone, Debug)]
 pub struct FHEByte {
-    // TODO: BIG ENDIAN instead of little endian
     data: VecDeque<Ciphertext>, //TODO: Convert to fixed size array
 }
 
@@ -139,12 +144,10 @@ impl FHEByte {
     }
 
     fn rotate_right_in_place(&mut self, shift: usize) -> () {
-        //TODO: Convert to fixed size array
         self.data.rotate_right(shift);
     }
 
     fn rotate_left_in_place(&mut self, shift: usize) -> () {
-        //TODO: Convert to fixed size array
         self.data.rotate_left(shift);
     }
 
@@ -161,7 +164,6 @@ impl FHEByte {
     }
 
     fn shift_right_in_place(&mut self, shift: usize, server_key: &ServerKey) -> () {
-        //TODO: Convert to fixed size array
         let shift = shift.clamp(0, 8);
         for _ in 0..shift {
             self.data.push_front(server_key.trivial_encrypt(false));
@@ -170,7 +172,6 @@ impl FHEByte {
     }
 
     fn shift_left_in_place(&mut self, shift: usize, server_key: &ServerKey) -> () {
-        //TODO: Convert to fixed size array
         let shift = shift.clamp(0, 8);
 
         for _ in 0..shift {
@@ -204,37 +205,8 @@ impl FHEByte {
         Self::trivial_clear(0, server_key)
     }
 
-    fn _sub_byte(&self) -> Self {
-        //TODO: After staged execution, this should be removed. Old iterator version.
-        let visited = Arc::new(DashMap::new());
-
-        
-    let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
-    let s_box_exprs: &Vec<BooleanExpr> = lazy_lock_sbox.as_ref();
-
-
-        let data = 
-            s_box_exprs
-                .iter()
-                .rev()
-                .map(move |x| {
-                    let mut curr_data = self.data.clone();
-                    let curr_visited = visited.clone();
-                    let guard_maybe_key = INTERNAL_KEY.read().unwrap();
-                    let server_key = guard_maybe_key.as_ref().expect("INIT BEFORE USING KEY");
-                        x.evaluate(
-                            curr_data.make_contiguous(),
-                            server_key,
-                            curr_visited,
-                        )
-                    })
-                .collect();
-
-        FHEByte { data }
-    }
 
     pub fn sub_byte(&self, server_key: &ServerKey) -> Self {
-        //TODO: Do staged evaluation.
         let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
 
         let lazy_lock_sbox = S_BOX_EXPR.read().unwrap();
@@ -251,8 +223,6 @@ impl FHEByte {
             let stage = expr.stage() as usize;
             grouped_by_stage[stage].push(expr);
         }
-
-        // println!("Hashset lengths {:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
 
         
         let mut operands: HashMap<Operand, Ciphertext> = HashMap::new();
@@ -278,19 +248,16 @@ impl FHEByte {
         operands.insert(Operand::False, server_key.trivial_encrypt(false));
 
 
-        let start = Instant::now();
         let mut hash_map: HashMap<BooleanExpr, Ciphertext> = HashMap::new();
         for i in 0..8 {
-            let start = Instant::now();
             hash_map.extend(grouped_by_stage[i].clone().into_iter()
                 .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
                 .collect::<Vec<_>>()
                 .into_par_iter()
                 .map_with(server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
                 .collect::<HashMap<_, _>>().into_iter());    
-            // println!("STAGE {:?} TIME {:?}", i, start.elapsed());
         }
-        // println!("TOTAL TIME {:?}", start.elapsed());
+
         let data = s_box_exprs.iter()
             .map(|expr| hash_map.get(expr).unwrap().clone()).collect();
             
@@ -325,7 +292,14 @@ impl FHEByte {
         FHEByte { data }
     }
 
-    pub fn mul_x_gf2_in_place(&mut self, server_key: &ServerKey) {
+
+
+    /// This function multiplies the byte by x in GF(2^8) and returns the result.
+    /// 
+    /// This is achieved by first checking if the most significant bit is set. 
+    /// If it is, then the byte is shifted left by 1 and then XORed with the irreducible polynomial 0x1b.
+    /// Otherwise, the byte is just shifted left by 1.
+    pub fn mul_x_gf2_in_place(&mut self, server_key: &ServerKey) { 
         let conditional_bit = self.data[0].clone();
         self.shift_left_in_place(1, server_key);
         let irr_poly = FHEByte::trivial_clear(0x1b, server_key);
@@ -341,7 +315,6 @@ impl FHEByte {
     }
 
     pub fn mul_x_gf2(&self, server_key: &ServerKey) -> Self {
-        //TODO: Convert xor to in place versions, using assign and replace the xor, add clear version
         let mut result = self.clone();
         result.mul_x_gf2_in_place(server_key);
         result

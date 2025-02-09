@@ -76,7 +76,7 @@ pub fn stage_exprs(data: [u8; 256]) -> Vec<HashSet<BooleanExpr>> {
         grouped_by_stage[stage].insert(expr);
     }
 
-    println!("{:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
+    // println!("{:?}", grouped_by_stage.iter().map(|x| x.len()).collect::<Vec<_>>());
     grouped_by_stage
 }
 

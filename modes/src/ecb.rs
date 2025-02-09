@@ -20,18 +20,10 @@ impl ECB {
 
         // Main rounds
         for round in 1..10 {
-            let mut start = Instant::now();
             state.sub_bytes(server_key);
-            println!("Sub Bytes Time Taken ROUND {:?} {:?}", round,  start.elapsed());
-            start = Instant::now();
             state.shift_rows();
-            println!("Shift Rows Time Taken ROUND {:?} {:?}", round,  start.elapsed());
-            start = Instant::now();
             state.mix_columns(server_key);
-            println!("Mix Columns Time Taken ROUND {:?} {:?}", round,  start.elapsed());
-            start = Instant::now();
             state.xor_key_enc(&self.keys[round], server_key);
-            println!("Xor Key Time Taken ROUND {:?} {:?}", round,  start.elapsed());
         }
 
 
@@ -48,14 +40,9 @@ impl ECB {
 
         // Main rounds
         for round in 1..10 {
-            let mut start = Instant::now();
             state.inv_shift_rows();
-            println!("Inv Shift Rows Time Taken ROUND {:?} {:?}", round, start.elapsed());
-            start = Instant::now();
             state.inv_sub_bytes(server_key);
-            start = Instant::now();
             state.xor_key_enc(&self.keys[10 - round], server_key);
-            start = Instant::now();
             state.inv_mix_columns(server_key);
 
         }

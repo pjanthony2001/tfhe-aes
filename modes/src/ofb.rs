@@ -7,8 +7,6 @@ use crate::ecb::ECB;
 /// 
 /// 
 /// 
-/// 
-
 
 pub struct OFB {
     ecb: ECB,

@@ -120,7 +120,7 @@ impl State {
     }
 
 
-    pub fn inv_mix_columns(&mut self, server_key: &ServerKey) { // TEST THOROUGHLY !!
+    pub fn inv_mix_columns(&mut self, server_key: &ServerKey) {
 
         let mut y: [FHEByte; 16] = (0..16_usize)
             .into_par_iter()

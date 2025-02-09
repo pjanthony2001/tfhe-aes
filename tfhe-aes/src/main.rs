@@ -39,12 +39,6 @@ enum Mode {
 }
 
 fn main() {
-
-
-
-
-}
-fn init() {
     let args = Args::parse();
 
     println!("Number of Outputs: {}", args.number_of_outputs);
@@ -67,6 +61,14 @@ fn init() {
         random_test_blocks.push(block);
     }
 
+    let (client_key, server_key) = gen_keys();
+
+    match mode {
+        Mode::ECB => test_ecb(&key, &random_test_blocks, key_expansion_offline, &server_key, &client_key),
+        Mode::CBC => test_cbc(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
+        Mode::CTR => test_ctr(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
+        Mode::OFB => test_ofb(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
+    }
 
 }
 
@@ -152,10 +154,11 @@ fn key_expansion(key: &[u8; 16], key_expansion_offline: bool, server_key: &Serve
     keys
 }
 
-fn cbc_encrypt_clear(mut blocks: Vec<[u8; 16]>, key: &[u8; 16], iv: &[u8; 16]) -> Vec<[u8; 16]> {
+fn cbc_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], iv: &[u8; 16]) -> Vec<[u8; 16]> {
     let aes = Aes128::new(GenericArray::from_slice(key));
     let mut prev_cipher = *iv; // Start with IV
     let mut ciphertext = Vec::with_capacity(blocks.len());
+    let mut blocks = blocks.to_vec();
 
     for block in blocks.iter_mut() {
         // XOR block with previous ciphertext (or IV for first block)
@@ -180,7 +183,7 @@ fn cbc_encrypt_clear(mut blocks: Vec<[u8; 16]>, key: &[u8; 16], iv: &[u8; 16]) -
 fn test_cbc(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]],  key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
     println!("Testing CBC mode");
 
-    let expected_result = cbc_encrypt_clear(blocks.to_vec(), key, iv);
+    let expected_result = cbc_encrypt_clear(blocks, key, iv);
 
 
     let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
@@ -242,6 +245,119 @@ fn increment_counter(mut counter: [u8; 16]) -> [u8; 16] {
     counter
 }
 
-fn ctr_encrypt_clear() {
-    
+fn ctr_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], counters: &[[u8; 16]]) -> Vec<[u8; 16]> {
+    let mut result = counters.to_vec();
+    let aes = Aes128::new(GenericArray::from_slice(key));
+
+    for i in 0..result.len() {
+        let mut counter_arr = GenericArray::from_mut_slice(&mut result[i]);
+        aes.encrypt_block(&mut counter_arr);
+
+        for j in 0..16 {
+            result[i][j] ^= blocks[i][j];
+        }
+    }
+
+    result
+}
+
+fn test_ctr(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
+    println!("Testing CTR mode");
+    let counters = generate_counters(iv, number_of_outputs);
+    let expected_result = ctr_encrypt_clear(blocks, key, &counters);
+
+
+
+    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
+
+    // ENCRYPTION
+    println!("Encryption");
+    let encrypted_counters = counters.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE 
+    let ctr = CTR::new(&keys, &encrypted_counters, number_of_outputs);
+
+    let start = Instant::now();
+    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
+    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
+
+    let start = Instant::now();
+    ctr.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
+    println!("Encryption Time Taken: {:?}", start.elapsed());
+
+    assert_eq!(
+        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        expected_result
+    );
+
+    // DECRYPTION
+    println!("Decryption");
+
+    let start = Instant::now();
+    ctr.decrypt(&mut encrypted_blocks, server_key);  // Decrypt with AES
+    println!("Decryption Time Taken: {:?}", start.elapsed());
+
+    assert_eq!(
+        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        blocks.to_vec()
+    );
+
+    println!("CTR mode test passed");
+}
+
+
+fn test_ofb(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
+    println!("Testing OFB mode");
+
+    let expected_result = ofb_encrypt_clear(blocks, key, iv);
+
+    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
+    let iv = State::from_u8_enc(iv, client_key);
+
+    // ENCRYPTION
+    println!("Encryption");
+    let ofb = OFB::new(&keys, &iv, number_of_outputs);
+
+    let start = Instant::now();
+    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
+    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
+
+    let start = Instant::now();
+    ofb.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
+    println!("Encryption Time Taken: {:?}", start.elapsed());
+
+    assert_eq!(
+        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        expected_result
+    );
+
+    // DECRYPTION
+    println!("Decryption");
+
+    let start = Instant::now();
+    ofb.decrypt(&mut encrypted_blocks, server_key);  // Decrypt with AES
+    println!("Decryption Time Taken: {:?}", start.elapsed());
+
+    assert_eq!(
+        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        blocks.to_vec()
+    );
+
+    println!("OFB mode test passed");
+}
+
+fn ofb_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], iv: &[u8; 16]) -> Vec<[u8; 16]> {
+    let mut result = blocks.to_vec();
+    let aes = Aes128::new(GenericArray::from_slice(key));
+
+    let mut curr_cipher = iv.clone();
+    let mut curr_cipher = GenericArray::from_mut_slice(&mut curr_cipher);
+    aes.encrypt_block(&mut curr_cipher);
+
+    for i in 0..result.len() {
+        for j in 0..16 {
+            result[i][j] ^= curr_cipher[j];
+        }
+        aes.encrypt_block(&mut curr_cipher);
+    }
+
+    result
 }
