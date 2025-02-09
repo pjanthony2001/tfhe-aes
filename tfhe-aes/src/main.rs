@@ -1,59 +1,125 @@
-use tfhe::boolean::prelude::*;
-use tfhe::boolean::gen_keys;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
-use rayon::prelude::*;
-use dashmap::DashMap;
+use clap::Parser;
+use hex;
+use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit, KeyInit, StreamCipher, generic_array::GenericArray, BlockEncrypt};
+use aes::Aes128;
+use rand::Rng;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short = 'n', long = "number-of-outputs", default_value_t = 1)]
+    number_of_outputs: u8,
+
+    #[arg(short, long)]
+    iv: String,
+
+    #[arg(short, long)]
+    key: String,
+
+    #[arg(short = 'x', long = "key-expansion-offline", default_value_t = false)]
+    key_expansion_offline: bool,
+
+    #[arg(short, long, default_value = "CTR")]
+    mode: String,
+}
+
+enum Mode {
+    ECB,
+    CBC,
+    CTR,
+}
+
+const BLOCK_SIZE_IN_BYTES: usize = 16;
+
 
 fn main() {
-    let (client_key, server_key) = gen_keys();
+    // Example: .\tfhe_aes.exe --number-of-outputs 11 --iv 11111111111111111111111111111111 --key AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  --mode ECB
+    let args = Args::parse();
 
-    let a = client_key.encrypt(true);
-    let b = client_key.encrypt(false);
-    let c = client_key.encrypt(true);
+    println!("Number of Outputs: {}", args.number_of_outputs);
+    println!("IV: {}", args.iv);
+    println!("Key: {}", args.key);
+    println!("Key Expansion Offline: {}", args.key_expansion_offline);
+    println!("Mode: {}", args.mode);
 
-    let dashmap: DashMap<u8, Ciphertext> = DashMap::new();
-    let mut hashmap: HashMap<u8, Ciphertext> = HashMap::new();
+    let key = parse_hex_16(&args.key).expect("Invalid key format");
+    let iv = parse_hex_16(&args.iv).expect("Invalid IV format");
+    println!("Parsed Key: {:?}", key);
+    println!("Parsed IV: {:?}", iv);
 
-    dashmap.insert(0, a.clone());
-    dashmap.insert(1, b.clone());
-    dashmap.insert(2, c.clone());
+    let mut rng = rand::thread_rng();
+    let random_blocks: Vec<[u8; 16]> = (0..args.number_of_outputs)
+        .map(|_| rng.gen::<[u8; 16]>())
+        .collect();
 
+    let plaintext = *b"hello world! this is my plaintext.";
+    let mode = parse_mode(&args.mode);
+    let ciphertext = aes_clear_encrypt(&plaintext, key, iv, mode);
+    println!("Ciphertext: {:?}", ciphertext);
+}
 
-    hashmap.insert(0, a);
-    hashmap.insert(1, b);
-    hashmap.insert(2, c);
+fn parse_mode(input: &str) -> Result<Mode, String> {
+    match input {
+        "ECB" => Ok(Mode::ECB),
+        "CBC" => Ok(Mode::CBC),
+        "CTR" => Ok(Mode::CTR),
+        _ => Err(format!("Invalid mode: {}", input)),
+    }
+}
 
+fn parse_hex_16(hex_str: &str) -> Result<[u8; 16], String> {
+    if hex_str.len() != 32 {
+        return Err(format!("Must be 32 hex characters (16 bytes), it is currently {} characters.", hex_str.len()));
+    }
+    let bytes = hex::decode(hex_str).map_err(|_| "Failed to decode hex")?;
+    let mut array = [0u8; 16];
+    array.copy_from_slice(&bytes[..16]);
+    Ok(array)
+}
 
-    let start_time = Instant::now();
-    let next_hashmap: HashMap<_, _>= (0..255).map(|x| {
-        let a = hashmap.get(&0).unwrap();
-        let b = hashmap.get(&1).unwrap();
-        let c = hashmap.get(&2).unwrap();
+fn aes_clear_encrypt(plaintext: &[u8], key: [u8; 16], iv: [u8; 16], mode: Result<Mode, String>) -> Vec<u8> {
+    match mode {
+        Ok(Mode::CBC) => aes_clear_encrypt_cbc(&plaintext, key, iv),
+        Ok(Mode::CTR) => aes_clear_encrypt_ctr(&plaintext, key, iv),
+        Ok(Mode::ECB) => aes_clear_encrypt_ecb(&plaintext, key),
+        Err(e) => panic!("Failed to determine mode: {:?}", e),
+    }
+}
 
-        (x, a, b, c)
-    }).collect::<Vec<_>>()
-    
-    .into_par_iter().map_with(server_key, |server_key, (x, a, b, c)| {
+fn aes_clear_encrypt_cbc(plaintext: &[u8], key: [u8; 16], iv: [u8; 16]) -> Vec<u8> {
+    type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+    let pt_len = plaintext.len();
+    let buffer_size = ((pt_len + BLOCK_SIZE_IN_BYTES - 1) / BLOCK_SIZE_IN_BYTES) * BLOCK_SIZE_IN_BYTES;
+    let mut buf = vec![0u8; buffer_size];
+    buf[..plaintext.len()].copy_from_slice(plaintext);
+    let ct = Aes128CbcEnc::new(&key.into(), &iv.into())
+    .encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len)
+    .unwrap();
+    ct.to_vec()
+}
 
-        (x, server_key.mux(&a, &b, &c))
-    
-    }).collect();
+fn aes_clear_encrypt_ctr(plaintext: &[u8], key: [u8; 16], iv: [u8; 16]) -> Vec<u8> {
+    type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
+    let mut buf = plaintext.to_vec();
+    let mut cipher = Aes128Ctr64LE::new(&key.into(), &iv.into());
+    cipher.apply_keystream(&mut buf);
+    return buf;
+}
 
-    let a = next_hashmap.get(&1);
+fn aes_clear_encrypt_ecb(plaintext: &[u8], key: [u8; 16]) -> Vec<u8> {
+    let cipher = Aes128::new(&GenericArray::from(key));
 
-    let duration = start_time.elapsed();
-    println!("Time per task: {:?}", duration / (255));
+    let pt_len = plaintext.len();
+    let padding_size = 16 - (pt_len % 16);
+    let mut padded_plaintext = Vec::from(plaintext);
 
-    //TODO: write the general operation function that takes a boolean obj and a hashmap and then converts it to an executable function. 
-    // Should to straight to collect, seems like I can get up to 18ms if I don't use dashmap to try to make it more complex
-    // simplify there are 133 * 18  ms per stage, so should be < 2s per byte subst 
-    // which means up to lower than 16s for the whole 16 bytes. which is a majority of our time. 
+    padded_plaintext.extend(vec![0u8; padding_size]);
 
-    // documentation next OOOF
-    // then we can start working on the actual AES implementation.  
-
-
-
+    let mut ciphertext = Vec::with_capacity(padded_plaintext.len());
+    for chunk in padded_plaintext.chunks(16) {
+        let mut block = GenericArray::clone_from_slice(chunk); 
+        cipher.encrypt_block(&mut block);
+        ciphertext.extend_from_slice(&block);
+    }
+    ciphertext
 }
