@@ -264,28 +264,62 @@ impl FHEByte {
     }
 
     pub fn inv_sub_byte(&self, server_key: &ServerKey) -> Self {
-        //TODO: Do staged evaluation.
-        let visited = Arc::new(DashMap::new());
         let curr_data = self.data.iter().rev().cloned().collect::<Vec<_>>();
 
         let lazy_lock_inv_sbox = INV_S_BOX_EXPR.read().unwrap();
         let inv_s_box_exprs: &Vec<BooleanExpr> = lazy_lock_inv_sbox.as_ref();
 
 
-        let data =
-        inv_s_box_exprs
-                .par_iter()
-                .map_with(
-                    (curr_data, server_key),
-                    move |(curr_data, server_key), x| {
-                        x.evaluate(
-                            curr_data,
-                            server_key,
-                            Arc::clone(&visited),
-                        )
-                    },
-                )
-                .collect();
+        let mut hashset: HashSet<BooleanExpr> = HashSet::new();
+        for expr in inv_s_box_exprs.iter() {
+            expr.to_hashset(&mut hashset);
+        }
+
+        let mut grouped_by_stage: Vec<Vec<BooleanExpr>> = vec![Vec::new(); 8];
+
+        // Iterate over each BooleanExpr and insert them into the appropriate HashSet based on their stage
+        for expr in hashset {
+            let stage = expr.stage() as usize;
+            grouped_by_stage[stage].push(expr);
+        }
+
+        
+        let mut operands: HashMap<Operand, Ciphertext> = HashMap::new();
+        operands.insert(Operand::Bit0, curr_data[0].clone());
+        operands.insert(Operand::Bit1, curr_data[1].clone());
+        operands.insert(Operand::Bit2, curr_data[2].clone());
+        operands.insert(Operand::Bit3, curr_data[3].clone());
+        operands.insert(Operand::Bit4, curr_data[4].clone());
+        operands.insert(Operand::Bit5, curr_data[5].clone());
+        operands.insert(Operand::Bit6, curr_data[6].clone());
+        operands.insert(Operand::Bit7, curr_data[7].clone());
+
+        operands.insert(Operand::NotBit0, server_key.not(&curr_data[0]));
+        operands.insert(Operand::NotBit1, server_key.not(&curr_data[1]));
+        operands.insert(Operand::NotBit2, server_key.not(&curr_data[2]));
+        operands.insert(Operand::NotBit3, server_key.not(&curr_data[3]));
+        operands.insert(Operand::NotBit4, server_key.not(&curr_data[4]));
+        operands.insert(Operand::NotBit5, server_key.not(&curr_data[5]));
+        operands.insert(Operand::NotBit6, server_key.not(&curr_data[6]));
+        operands.insert(Operand::NotBit7, server_key.not(&curr_data[7]));
+
+        operands.insert(Operand::True, server_key.trivial_encrypt(true));
+        operands.insert(Operand::False, server_key.trivial_encrypt(false));
+
+
+        let mut hash_map: HashMap<BooleanExpr, Ciphertext> = HashMap::new();
+        for i in 0..8 {
+            hash_map.extend(grouped_by_stage[i].clone().into_iter()
+                .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
+                .collect::<Vec<_>>()
+                .into_par_iter()
+                .map_with(server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+                .collect::<HashMap<_, _>>().into_iter());    
+        }
+
+        let data = inv_s_box_exprs.iter()
+            .map(|expr| hash_map.get(expr).unwrap().clone()).collect();
+            
 
         FHEByte { data }
     }
@@ -357,7 +391,7 @@ mod tests {
     #[test]
     fn test_and() {
         let (client_key, server_key) = gen_keys();
-        
+
         let x = FHEByte::new(
             &vec![true, true, true, true, true, true, true, true],
             &client_key,

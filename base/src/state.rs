@@ -331,6 +331,26 @@ fn test_sub_bytes() {
 
 
     }
+
+    #[test]
+fn test_inv_sub_bytes() {
+    let (client_key, server_key) = gen_keys();
+    set_server_key(&server_key);
+    let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
+    let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
+
+        test_data
+            .par_iter_mut()
+            .map(|state| {
+                state.inv_sub_bytes(&server_key)
+            })
+            .collect::<Vec<_>>();
+
+    assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0x193de3be_a0f4e22b_9ac68d2a_e9f84808, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
+
+
+    }
+
     #[test]
 fn test_shift_rows() {
     let (client_key, server_key) = gen_keys();
