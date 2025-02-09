@@ -342,14 +342,13 @@ mod tests {
         );
 
         let mut test_data: Vec<_> = (0..200).into_iter().map(|_| x.clone()).collect();
-        let start = Instant::now();
+
         with_server_key(|server_key| {
             test_data
                 .par_iter_mut()
                 .for_each_with(server_key, |server_key, x| x.xor_in_place(&y, server_key))
         });
 
-        println!("PAR_ITER_XOR_METHOD {:?}", start.elapsed() / 200);
         assert!(
             test_data[0].decrypt(&client_key)
                 == vec![false, true, false, true, false, false, false, false]
@@ -372,14 +371,13 @@ mod tests {
         );
 
         let mut test_data: Vec<_> = (0..200).into_iter().map(|_| x.clone()).collect();
-        let start = Instant::now();
+
         with_server_key(|server_key| {
             test_data
                 .par_iter_mut()
                 .for_each_with(server_key, |server_key, x| x.and_in_place(&y, server_key))
         });
 
-        println!("PAR_ITER_AND_METHOD {:?}", start.elapsed() / 1000);
 
         assert!(
             test_data[0].decrypt(&client_key)
@@ -394,13 +392,9 @@ mod tests {
 
         let x = FHEByte::from_u8_enc(&0x01, &client_key);
 
-        let start = Instant::now();
-
         let y = with_server_key(|server_key| {
             x.sub_byte(server_key)  
         });
-
-        println!("CONSUME_PARALLEL_ {:?}", start.elapsed() / 1);
 
         assert_eq!(y.decrypt_to_u8(&client_key), 0x7c, "{:#x?}", y.decrypt_to_u8(&client_key));
     }
@@ -414,7 +408,7 @@ mod tests {
 
         res
     }
-    
+
     #[test]
     fn test_mul_gf_2() {
         let (client_key, server_key) = gen_keys();
@@ -422,7 +416,6 @@ mod tests {
 
         for clear_value in 0..=255 {
             let x = FHEByte::from_u8_enc(&clear_value, &client_key);
-            let start = Instant::now();
     
             let y: Vec<_> = with_server_key(|server_key| {
                 (0..1)
@@ -430,9 +423,7 @@ mod tests {
                     .map_with(server_key, |server_key, _| x.mul_x_gf2(server_key))
                     .collect()
             });
-    
-            println!("CONSUME_PARALLEL_ {:?}", start.elapsed() / 1);
-    
+        
             assert_eq!(y[0].decrypt_to_u8(&client_key), clear_mul_x_gf2(&clear_value))
         }
     }

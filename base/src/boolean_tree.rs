@@ -382,56 +382,6 @@ impl BooleanExpr {
 
 }
 
-
-enum Expression {
-    Operand(Ciphertext),
-    And(Ciphertext, Ciphertext),
-    Or(Ciphertext, Ciphertext),
-    Xor(Ciphertext, Ciphertext),
-    Mux(Ciphertext, Ciphertext, Ciphertext),
-}
-
-impl Expression {
-    fn from(value: BooleanExpr, inc_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>, operands: Arc<DashMap<Operand, Ciphertext>>) -> Self {
-        match value {
-            BooleanExpr::Operand(op) => {let operand = operands.get(&op).expect("Operand not in hashmap").value().clone(); Self::Operand(operand)},
-            BooleanExpr::And(op_1, op_2) => 
-            {
-                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Self::And(operand_1, operand_2)
-            },
-            BooleanExpr::Or(op_1, op_2) => {
-                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Self::Or(operand_1, operand_2)
-            },
-            BooleanExpr::Xor(op_1, op_2) => {
-                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Self::Xor(operand_1, operand_2)
-            },
-            BooleanExpr::Mux(mux, op_1, op_2) => {
-                let mux_ = operands.get(&mux).expect("Mux not in hashmap").value().clone();
-                let operand_1 = inc_hashmap.get(&op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(&op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Self::Mux(mux_, operand_1, operand_2)
-            },
-        }
-    }
-
-
-    fn evaluate(&self, server_key: &ServerKey, ) -> Ciphertext {
-        match self {
-            Expression::Operand(ciphertext) => ciphertext.clone(),
-            Expression::And(operand_1, operand_2) => server_key.and(operand_1, operand_2),
-            Expression::Or(operand_1, operand_2) => server_key.or(operand_1, operand_2),
-            Expression::Xor(operand_1, operand_2) => server_key.xor(operand_1, operand_2),
-            Expression::Mux(mux, operand_1, operand_2) => server_key.mux(mux, operand_1, operand_2),
-        }
-    }
-}
-
 impl From<bool> for BooleanExpr {
     fn from(value: bool) -> Self {
         BooleanExpr::Operand(value.into())
