@@ -297,18 +297,16 @@ mod tests {
     #[test]
     fn test_mix_columns() {
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5 , &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
 
-        with_server_key(|server_key| {
+
             test_data
                 .par_iter_mut()
-                .for_each_with(server_key, |server_key, state| {
+                .for_each(|state| {
                     state.mix_columns(&server_key)
-                })
-        });
+                });
 
         assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0x046681e5_e0cb199a_48f8d37a_2806264c, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
 
@@ -322,14 +320,12 @@ fn test_sub_bytes() {
     let state = State::from_u128_enc(0x193de3be_a0f4e22b_9ac68d2a_e9f84808, &client_key);
     let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
-    with_server_key(|server_key| {
         test_data
             .par_iter_mut()
-            .map_with(server_key, |server_key, state| {
+            .map(|state| {
                 state.sub_bytes(&server_key)
             })
-            .collect::<Vec<_>>()
-    });
+            .collect::<Vec<_>>();
 
     assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd42711ae_e0bf98f1_b8b45de5_1e415230, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
 
@@ -374,19 +370,15 @@ fn test_shift_rows() {
     #[test]
     fn test_inv_mix_columns() {
         let (client_key, server_key) = gen_keys();
-        set_server_key(&server_key);
         let state = State::from_u128_enc(0x046681e5_e0cb199a_48f8d37a_2806264c, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
     
-        let start = Instant::now();
-        with_server_key(|server_key| {
             test_data
                 .par_iter_mut()
-                .map_with(server_key, |server_key, state| {
+                .map(|state| {
                     state.inv_mix_columns(&server_key)
                 })
-                .collect::<Vec<_>>()
-        });
+                .collect::<Vec<_>>();
 
         assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
 
@@ -397,7 +389,6 @@ fn test_shift_rows() {
         #[test]
         fn test_decrypt_u128() {
             let (client_key, server_key) = gen_keys();
-            set_server_key(&server_key);
             let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
             
             assert_eq!(state.decrypt_to_u128(&client_key), 0x04e04828_66cbf806_8119d326_e59a7a4c, "{:#x?}", state.decrypt_to_u128(&client_key));
