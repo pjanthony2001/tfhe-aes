@@ -47,7 +47,6 @@ impl CBC {
 mod tests {
 
     use super::*;
-    use base::primitive::*;
     use std::time::Instant;
     use tfhe::boolean::gen_keys;
 

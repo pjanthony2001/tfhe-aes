@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn test_shift_rows() {
         // This test follows the test case on page 34 of the FIPS-197 standard
-        let (client_key, server_key) = gen_keys();
+        let (client_key, _) = gen_keys();
         let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn test_inv_shift_rows() {
         // This test follows the test case on page 34 of the FIPS-197 standard
-        let (client_key, server_key) = gen_keys();
+        let (client_key, _) = gen_keys();
         let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
