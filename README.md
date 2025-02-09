@@ -90,7 +90,7 @@ cargo run --release -- [OPTIONS]
 ```
 Or, if you built the project:
 ```sh
-./target/release/<program-name> [OPTIONS]
+./target/release/tfhe_aes [OPTIONS]
 ```
 
 ### **Available Arguments**
@@ -100,7 +100,7 @@ Or, if you built the project:
 | `--iv <hex-string>`          | `-i`  | 16-byte Initialization Vector (IV) in hexadecimal format. |
 | `--key <hex-string>`         | `-k`  | 16-byte encryption key in hexadecimal format. |
 | `--key-expansion-offline`    | `-x`  | Enable offline key expansion (default: `false`). |
-| `--mode <ECB|CBC|CTR|OFB>`   | `-m`  | Encryption mode (default: `CTR`). |
+| `--mode <ECB\|CBC\|CTR\|OFB>` | `-m`  | Encryption mode (default: `CTR`). |
 
 ---
 
