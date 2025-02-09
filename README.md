@@ -29,4 +29,101 @@ This ability to uniquely hash the `BooleanExpr` is useful in the next step: stag
 However, this optimization seems to have hit an internal bottleneck, as we observe about half the speed as it should achieve, averaging around 1.6s per byte substitution on a 16-thread machine, where the optimal performance should be <1s.
 
 ## AES implementation
+<<<<<<< HEAD
 We followed "Efficient Implementation of AES in 32 bit systems" 
+=======
+
+# **Getting Started Guide: Building and Running the Program**
+
+This guide will walk you through **building and running** the program, explaining its required arguments and expected behavior.
+
+---
+
+## **1. Prerequisites**
+Ensure you have the following installed on your system:
+- **Rust** (latest stable version)  
+  If Rust is not installed, you can install it using [Rustup](https://rustup.rs/):  
+  ```sh
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **Cargo** (Rust’s package manager, included with Rust)  
+
+To verify that Rust and Cargo are installed, run:
+```sh
+rustc --version
+cargo --version
+```
+
+---
+
+## **2. Setting Up the Project**  
+Clone the repository and navigate to the project directory:  
+```sh
+git clone https://github.com/pjanthony2001/tfhe-aes && cd tfhe-aes  
+```
+
+---
+
+## **3. Building the Program**
+To compile the program, run:
+```sh
+cargo build --release
+```
+This will generate an optimized executable in the `target/release` directory.
+
+For development builds (faster compilation but lower optimization), use:
+```sh
+cargo build
+```
+
+---
+
+## **4. Running the Program**
+The program requires several command-line arguments. Use the following format:
+```sh
+cargo run --release -- [OPTIONS]
+```
+Or, if you built the project:
+```sh
+./target/release/<program-name> [OPTIONS]
+```
+
+### **Available Arguments**
+| Argument                     | Short | Description |
+|------------------------------|:-----:|-------------|
+| `--number-of-outputs <u8>`   | `-n`  | Number of random test blocks to generate (default: `1`). |
+| `--iv <hex-string>`          | `-i`  | 16-byte Initialization Vector (IV) in hexadecimal format. |
+| `--key <hex-string>`         | `-k`  | 16-byte encryption key in hexadecimal format. |
+| `--key-expansion-offline`    | `-x`  | Enable offline key expansion (default: `false`). |
+| `--mode <ECB|CBC|CTR|OFB>`   | `-m`  | Encryption mode (default: `CTR`). |
+
+---
+
+## **5. Example Usage**
+### **Basic Example**
+```sh
+cargo run --release -- -i "00112233445566778899AABBCCDDEEFF" -k "0F1571C947D9E8590CB7ADD6AF7F6798"
+```
+This runs the program with:
+- IV: `00112233445566778899AABBCCDDEEFF`
+- Key: `0F1571C947D9E8590CB7ADD6AF7F6798`
+- Default mode: `CTR`
+- Default output count: `1`
+
+### **Specifying a Mode and Multiple Outputs**
+```sh
+cargo run --release -- -n 5 -i "00112233445566778899AABBCCDDEEFF" -k "0F1571C947D9E8590CB7ADD6AF7F6798" -m ECB
+```
+This runs the program with:
+- 5 random output blocks
+- IV and key specified in hex
+- **ECB mode** instead of default `CTR`
+
+### **Enabling Key Expansion Offline**
+```sh
+cargo run --release -- -i "00112233445566778899AABBCCDDEEFF" -k "0F1571C947D9E8590CB7ADD6AF7F6798" -x
+```
+This enables **offline key expansion**.
+
+---
+>>>>>>> d728b5f8c86da06d21ba3db7bb0ba94492f2f4e5
