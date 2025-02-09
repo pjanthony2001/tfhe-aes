@@ -1,15 +1,12 @@
+use crate::Key;
 use crate::primitive::*;
 use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
-use crate::Key;
 
 #[derive(Clone)]
-pub struct State { // This matrix is the transposed state matrix, and algorithms are implemented as such.
-    data: [FHEByte; 16], // Each element of this array is the following in the transposed state matrix
-                         // 0 4 8 12
-                         // 1 5 9 13
-                         // 2 6 10 14
-                         // 3 7 11 15
+pub struct State {
+    // This matrix is the transposed state matrix, and algorithms are implemented as such.
+    data: [FHEByte; 16],
 }
 
 impl State {
@@ -21,6 +18,7 @@ impl State {
             .try_into()
             .unwrap();
 
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -35,7 +33,8 @@ impl State {
 
     pub fn from_u8_enc(data: &[u8; 16], client_key: &ClientKey) -> Self {
         let mut data = data.map(|value| FHEByte::from_u8_enc(&value, client_key));
-        
+
+        // TRANSPOSE INPUT DATA
         data.swap(1, 4);
         data.swap(2, 8);
         data.swap(3, 12);
@@ -69,8 +68,7 @@ impl State {
     }
 
     pub fn mix_columns(&mut self, server_key: &ServerKey) {
-        //pass along the server_key !
-        let data_order: [usize; 16] = [8, 9, 10, 11, 8, 9 , 10, 11, 0, 1, 2, 3, 0, 1, 2, 3];
+        let data_order: [usize; 16] = [8, 9, 10, 11, 8, 9, 10, 11, 0, 1, 2, 3, 0, 1, 2, 3];
 
         let mut y: [FHEByte; 16] = data_order
             .into_par_iter()
@@ -91,8 +89,6 @@ impl State {
             .for_each_with(server_key, |server_key, (x, y)| {
                 x.xor_in_place(y, server_key)
             });
-
-        
 
         self.data
             .par_iter_mut()
@@ -119,9 +115,7 @@ impl State {
         self.data = y
     }
 
-
     pub fn inv_mix_columns(&mut self, server_key: &ServerKey) {
-
         let mut y: [FHEByte; 16] = (0..16_usize)
             .into_par_iter()
             .map_with(server_key, |server_key, i| {
@@ -133,82 +127,104 @@ impl State {
         // y_i = (x_i ^ x_(i + 1) % 4)
 
         let mut temp_0: [FHEByte; 8] = (0..8)
-        .into_par_iter()            
-        .map_with(server_key, |server_key, i| {
-            self.data[i].xor(&self.data[i + 8], server_key)
-        })
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap(); // (X_i XOR X_(i + 2))
+            .into_par_iter()
+            .map_with(server_key, |server_key, i| {
+                self.data[i].xor(&self.data[i + 8], server_key)
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(); // (X_i XOR X_(i + 2))
 
-        temp_0.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        }); // 02 * (X_i XOR X_(i + 2))
+        temp_0
+            .par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key)); // 02 * (X_i XOR X_(i + 2))
 
-        temp_0.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        }); // 04 * (X_i XOR X_(i + 2))
+        temp_0
+            .par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key)); // 04 * (X_i XOR X_(i + 2))
 
-        let mut temp_1: [FHEByte; 4] = y[..4].par_iter().zip(y[8..12].par_iter())     
-        .map_with(server_key, |server_key, (x, y)| {
-            x.xor(y, server_key)
-        })
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap(); // (X_0 ^ X_1 ^ X_2 ^ X_3)
+        let mut temp_1: [FHEByte; 4] = y[..4]
+            .par_iter()
+            .zip(y[8..12].par_iter())
+            .map_with(server_key, |server_key, (x, y)| x.xor(y, server_key))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(); // (X_0 ^ X_1 ^ X_2 ^ X_3)
 
-        let temp_0_iter = temp_0[..4].par_iter().chain(temp_0[4..].par_iter()).chain(temp_0[..4].par_iter()).chain(temp_0[4..].par_iter());
-        
-        y.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        });
+        let temp_0_iter = temp_0[..4]
+            .par_iter()
+            .chain(temp_0[4..].par_iter())
+            .chain(temp_0[..4].par_iter())
+            .chain(temp_0[4..].par_iter());
 
-        y.par_iter_mut().zip(temp_0_iter).for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        });
+        y.par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key));
 
-        let temp_1_iter = temp_1.par_iter().chain(temp_1.par_iter()).chain(temp_1.par_iter()).chain(temp_1.par_iter());
+        y.par_iter_mut()
+            .zip(temp_0_iter)
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
 
-        self.data.par_iter_mut().zip(y.par_iter()).for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        });
+        let temp_1_iter = temp_1
+            .par_iter()
+            .chain(temp_1.par_iter())
+            .chain(temp_1.par_iter())
+            .chain(temp_1.par_iter());
 
-        self.data.par_iter_mut().zip(temp_1_iter).for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        }); 
+        self.data
+            .par_iter_mut()
+            .zip(y.par_iter())
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
 
-        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        });
+        self.data
+            .par_iter_mut()
+            .zip(temp_1_iter)
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
 
-        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        });
+        temp_1
+            .par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key));
 
-        temp_1.par_iter_mut().for_each_with(server_key, |server_key, x| {
-            x.mul_x_gf2_in_place(server_key)
-        }); //08 * (X_0 ^ X_1 ^ X_2 ^ X_3)
+        temp_1
+            .par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key));
 
-        let temp_1_iter = temp_1.par_iter().chain(temp_1.par_iter()).chain(temp_1.par_iter()).chain(temp_1.par_iter());
+        temp_1
+            .par_iter_mut()
+            .for_each_with(server_key, |server_key, x| x.mul_x_gf2_in_place(server_key)); //08 * (X_0 ^ X_1 ^ X_2 ^ X_3)
 
-        self.data.par_iter_mut().zip(temp_1_iter).for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        }); 
+        let temp_1_iter = temp_1
+            .par_iter()
+            .chain(temp_1.par_iter())
+            .chain(temp_1.par_iter())
+            .chain(temp_1.par_iter());
 
+        self.data
+            .par_iter_mut()
+            .zip(temp_1_iter)
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
     }
 
     pub fn xor_key_enc(&mut self, key: &Key, server_key: &ServerKey) {
-
-        self.data.par_iter_mut()
-        .zip(key.data.par_iter())
-        .for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        });
+        self.data
+            .par_iter_mut()
+            .zip(key.data.par_iter())
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
     }
 
     pub fn xor_key_clear(&mut self, key: &[u8; 16], server_key: &ServerKey) {
         let mut key_data = key.clone();
 
+        // TRANSPOSE INPUT DATA
         key_data.swap(1, 4);
         key_data.swap(2, 8);
         key_data.swap(3, 12);
@@ -218,28 +234,39 @@ impl State {
 
         key_data.swap(11, 14);
 
-        self.data.par_iter_mut()
-        .zip(key_data.into_par_iter())
-        .for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(&FHEByte::trivial_clear(y, server_key), server_key)
-        });
+        self.data
+            .par_iter_mut()
+            .zip(key_data.into_par_iter())
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(&FHEByte::trivial_clear(y, server_key), server_key)
+            });
     }
 
     pub fn xor_state(&mut self, state: &State, server_key: &ServerKey) {
-        self.data.par_iter_mut()
-        .zip(state.data.par_iter())
-        .for_each_with(server_key, |server_key, (x, y)| {
-            x.xor_in_place(y, server_key)
-        });
+        self.data
+            .par_iter_mut()
+            .zip(state.data.par_iter())
+            .for_each_with(server_key, |server_key, (x, y)| {
+                x.xor_in_place(y, server_key)
+            });
     }
 
     pub fn decrypt_to_u8(&self, client_key: &ClientKey) -> [u8; 16] {
-        let mut decrypted_data: [u8; 16] = self.data.iter().map(|x| (&x.decrypt(client_key))                
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
-        .sum()).collect::<Vec<_>>().try_into().unwrap();
+        let mut decrypted_data: [u8; 16] = self
+            .data
+            .iter()
+            .map(|x| {
+                (&x.decrypt(client_key))
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
+                    .sum()
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
 
+        // TRANSPOSE OUTPUT DATA
         decrypted_data.swap(1, 4);
         decrypted_data.swap(2, 8);
         decrypted_data.swap(3, 12);
@@ -262,7 +289,6 @@ impl State {
 
         res ^= u8_data[15] as u128;
         res
-
     }
 
     pub fn shift_rows(&mut self) {
@@ -282,8 +308,6 @@ impl State {
         slice = &mut self.data[12..];
         slice.rotate_right(3);
     }
-
-
 }
 
 #[cfg(test)]
@@ -296,127 +320,137 @@ mod tests {
 
     #[test]
     fn test_mix_columns() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
-        let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5 , &client_key);
+        let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
-
-
-            test_data
-                .par_iter_mut()
-                .for_each(|state| {
-                    state.mix_columns(&server_key)
-                });
-
-        assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0x046681e5_e0cb199a_48f8d37a_2806264c, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
-
-
-    }
-
-#[test]
-fn test_sub_bytes() {
-    let (client_key, server_key) = gen_keys();
-    set_server_key(&server_key);
-    let state = State::from_u128_enc(0x193de3be_a0f4e22b_9ac68d2a_e9f84808, &client_key);
-    let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
-
         test_data
             .par_iter_mut()
-            .map(|state| {
-                state.sub_bytes(&server_key)
-            })
-            .collect::<Vec<_>>();
+            .for_each(|state| state.mix_columns(&server_key));
 
-    assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd42711ae_e0bf98f1_b8b45de5_1e415230, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
-
-
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0x046681e5_e0cb199a_48f8d37a_2806264c,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
     }
 
     #[test]
-fn test_inv_sub_bytes() {
-    let (client_key, server_key) = gen_keys();
-    set_server_key(&server_key);
-    let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
-    let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
+    fn test_sub_bytes() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
+        let (client_key, server_key) = gen_keys();
+        set_server_key(&server_key);
+        let state = State::from_u128_enc(0x193de3be_a0f4e22b_9ac68d2a_e9f84808, &client_key);
+        let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
         test_data
             .par_iter_mut()
-            .map(|state| {
-                state.inv_sub_bytes(&server_key)
-            })
+            .map(|state| state.sub_bytes(&server_key))
             .collect::<Vec<_>>();
 
-    assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0x193de3be_a0f4e22b_9ac68d2a_e9f84808, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
-
-
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0xd42711ae_e0bf98f1_b8b45de5_1e415230,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
     }
 
     #[test]
-fn test_shift_rows() {
-    let (client_key, server_key) = gen_keys();
-    set_server_key(&server_key);
-    let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
-    let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
+    fn test_inv_sub_bytes() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
+        let (client_key, server_key) = gen_keys();
+        set_server_key(&server_key);
+        let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
+        let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
-    test_data
+        test_data
             .par_iter_mut()
-            .map(| state| {
-                state.shift_rows()
-            })
+            .map(|state| state.inv_sub_bytes(&server_key))
             .collect::<Vec<_>>();
 
-    assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0x193de3be_a0f4e22b_9ac68d2a_e9f84808,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
+    }
+
+    #[test]
+    fn test_shift_rows() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
+        let (client_key, server_key) = gen_keys();
+        set_server_key(&server_key);
+        let state = State::from_u128_enc(0xd42711ae_e0bf98f1_b8b45de5_1e415230, &client_key);
+        let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
+
+        test_data
+            .par_iter_mut()
+            .map(|state| state.shift_rows())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0xd4bf5d30_e0b452ae_b84111f1_1e2798e5,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
     }
 
     #[test]
     fn test_inv_shift_rows() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
         let state = State::from_u128_enc(0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
 
         test_data
-                .par_iter_mut()
-                .map(|state| {
-                    state.inv_shift_rows()
-                })
-                .collect::<Vec<_>>();
-    
-        assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd42711ae_e0bf98f1_b8b45de5_1e415230, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
+            .par_iter_mut()
+            .map(|state| state.inv_shift_rows())
+            .collect::<Vec<_>>();
 
-    
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0xd42711ae_e0bf98f1_b8b45de5_1e415230,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
     }
 
     #[test]
     fn test_inv_mix_columns() {
+        // This test follows the test case on page 34 of the FIPS-197 standard
         let (client_key, server_key) = gen_keys();
         let state = State::from_u128_enc(0x046681e5_e0cb199a_48f8d37a_2806264c, &client_key);
         let mut test_data: Vec<_> = (0..1).into_iter().map(|_| state.clone()).collect();
-    
-            test_data
-                .par_iter_mut()
-                .map(|state| {
-                    state.inv_mix_columns(&server_key)
-                })
-                .collect::<Vec<_>>();
 
-        assert_eq!(test_data[0].decrypt_to_u128(&client_key), 0xd4bf5d30_e0b452ae_b84111f1_1e2798e5, "{:#x?}", test_data[0].decrypt_to_u128(&client_key));
+        test_data
+            .par_iter_mut()
+            .map(|state| state.inv_mix_columns(&server_key))
+            .collect::<Vec<_>>();
 
-    
-        }
+        assert_eq!(
+            test_data[0].decrypt_to_u128(&client_key),
+            0xd4bf5d30_e0b452ae_b84111f1_1e2798e5,
+            "{:#x?}",
+            test_data[0].decrypt_to_u128(&client_key)
+        );
+    }
 
+    #[test]
+    fn test_decrypt_u128() {
+        let (client_key, server_key) = gen_keys();
+        let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
 
-        #[test]
-        fn test_decrypt_u128() {
-            let (client_key, server_key) = gen_keys();
-            let state = State::from_u128_enc(0x04e04828_66cbf806_8119d326_e59a7a4c, &client_key);
-            
-            assert_eq!(state.decrypt_to_u128(&client_key), 0x04e04828_66cbf806_8119d326_e59a7a4c, "{:#x?}", state.decrypt_to_u128(&client_key));
-        
-        }
-
-
-
-
-
+        assert_eq!(
+            state.decrypt_to_u128(&client_key),
+            0x04e04828_66cbf806_8119d326_e59a7a4c,
+            "{:#x?}",
+            state.decrypt_to_u128(&client_key)
+        );
+    }
 }

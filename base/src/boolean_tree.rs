@@ -1,6 +1,6 @@
 use dashmap::DashMap;
-use std::hash::{Hash, Hasher};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
 use tfhe::boolean::prelude::*;
@@ -64,11 +64,7 @@ impl From<bool> for Operand {
 }
 
 impl Operand {
-    fn evaluate(
-        &self,
-        bits: &[Ciphertext],
-        server_key: &ServerKey,
-    ) -> Ciphertext {
+    fn evaluate(&self, bits: &[Ciphertext], server_key: &ServerKey) -> Ciphertext {
         match self {
             Operand::True => server_key.trivial_encrypt(true),
             Operand::False => server_key.trivial_encrypt(false),
@@ -105,19 +101,14 @@ pub enum BooleanExpr {
     Mux(Operand, Box<BooleanExpr>, Box<BooleanExpr>),
 }
 
-
 impl Not for BooleanExpr {
     type Output = Self;
 
     fn not(self) -> Self::Output {
         match self {
             BooleanExpr::Operand(inner) => BooleanExpr::Operand(!inner),
-            BooleanExpr::And(inner_0, inner_1) => {
-                BooleanExpr::ordered_or(!*inner_0, !*inner_1)
-            },
-            BooleanExpr::Or(inner_0, inner_1) => {
-                BooleanExpr::ordered_and(!*inner_0, !*inner_1)
-            }
+            BooleanExpr::And(inner_0, inner_1) => BooleanExpr::ordered_or(!*inner_0, !*inner_1),
+            BooleanExpr::Or(inner_0, inner_1) => BooleanExpr::ordered_and(!*inner_0, !*inner_1),
             BooleanExpr::Xor(inner_0, inner_1) => BooleanExpr::ordered_xor(!*inner_0, *inner_1),
             BooleanExpr::Mux(mux, inner_0, inner_1) => {
                 BooleanExpr::Mux(mux, Box::new(!*inner_0), Box::new(!*inner_1))
@@ -131,10 +122,7 @@ impl BooleanExpr {
         match right {
             BooleanExpr::Operand(Operand::True) => BooleanExpr::Operand(Operand::True),
             BooleanExpr::Operand(Operand::False) => BooleanExpr::Operand(*mux),
-            _ => BooleanExpr::ordered_or(
-                BooleanExpr::Operand(*mux),
-                right.clone(),
-            ),
+            _ => BooleanExpr::ordered_or(BooleanExpr::Operand(*mux), right.clone()),
         }
     }
 
@@ -142,10 +130,7 @@ impl BooleanExpr {
         match right {
             BooleanExpr::Operand(Operand::True) => BooleanExpr::Operand(!*mux),
             BooleanExpr::Operand(Operand::False) => BooleanExpr::Operand(Operand::False),
-            _ => BooleanExpr::ordered_and(
-                BooleanExpr::Operand(!*mux),
-                right.clone(),
-            ),
+            _ => BooleanExpr::ordered_and(BooleanExpr::Operand(!*mux), right.clone()),
         }
     }
 
@@ -154,7 +139,9 @@ impl BooleanExpr {
             BooleanExpr::Operand(Operand::True) => Self::mux_left_true(&!*mux, left),
             BooleanExpr::Operand(Operand::False) => Self::mux_left_false(&!*mux, left),
             _ if left == right => left.clone(),
-            _ if *left == !right.clone() => BooleanExpr::ordered_xor(BooleanExpr::Operand(!*mux), left.clone()),
+            _ if *left == !right.clone() => {
+                BooleanExpr::ordered_xor(BooleanExpr::Operand(!*mux), left.clone())
+            }
             _ => BooleanExpr::Mux(*mux, Box::new(left.clone()), Box::new(right.clone())),
         }
     }
@@ -184,7 +171,6 @@ impl BooleanExpr {
         let (left, right) = BooleanExpr::order_expr(op_1, op_2);
         BooleanExpr::And(Box::new(left), Box::new(right))
     }
-
 
     fn ordered_or(op_1: BooleanExpr, op_2: BooleanExpr) -> BooleanExpr {
         let (left, right) = BooleanExpr::order_expr(op_1, op_2);
@@ -249,7 +235,7 @@ impl BooleanExpr {
         }
 
         let evaluated_expr = match self {
-            BooleanExpr::Operand(op) => op.evaluate(bits,server_key),
+            BooleanExpr::Operand(op) => op.evaluate(bits, server_key),
             BooleanExpr::And(op_1, op_2) => server_key.and(
                 &(op_1).evaluate(bits, server_key, visited.clone()),
                 &op_2.evaluate(bits, server_key, visited.clone()),
@@ -292,61 +278,130 @@ impl BooleanExpr {
         match self {
             BooleanExpr::Operand(_) => {
                 hashset.insert(self.clone());
-            },
+            }
             BooleanExpr::And(lhs, rhs) => {
                 lhs.to_hashset(hashset);
                 rhs.to_hashset(hashset);
-            },
+            }
             BooleanExpr::Or(lhs, rhs) => {
                 lhs.to_hashset(hashset);
                 rhs.to_hashset(hashset);
-            },
+            }
             BooleanExpr::Xor(lhs, rhs) => {
                 lhs.to_hashset(hashset);
                 rhs.to_hashset(hashset);
-            },
+            }
             BooleanExpr::Mux(_, lhs, rhs) => {
                 lhs.to_hashset(hashset);
                 rhs.to_hashset(hashset);
-            },
+            }
         }
     }
-    
-    
+
     #[inline(always)]
     pub fn evaluate_stage<'a>(
         &'a self,
         server_key: &'a ServerKey,
         operands: Arc<DashMap<Operand, Ciphertext>>,
         inc_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>,
-        out_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>
+        out_hashmap: Arc<DashMap<BooleanExpr, Option<Ciphertext>>>,
     ) -> Box<dyn FnOnce() -> () + 'a> {
         match self {
-            BooleanExpr::Operand(op) => {let operand = operands.get(op).expect("Operand not in hashmap").value().clone(); Box::new(move || {out_hashmap.insert(self.clone(), Some(operand.clone()));})},
-            BooleanExpr::And(op_1, op_2) => 
-            {
-                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.and(&operand_1, &operand_2)));})
-            },
+            BooleanExpr::Operand(op) => {
+                let operand = operands
+                    .get(op)
+                    .expect("Operand not in hashmap")
+                    .value()
+                    .clone();
+                Box::new(move || {
+                    out_hashmap.insert(self.clone(), Some(operand.clone()));
+                })
+            }
+            BooleanExpr::And(op_1, op_2) => {
+                let operand_1 = inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                let operand_2 = inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                Box::new(move || {
+                    out_hashmap.insert(self.clone(), Some(server_key.and(&operand_1, &operand_2)));
+                })
+            }
             BooleanExpr::Or(op_1, op_2) => {
-                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.or(&operand_1, &operand_2)));})
-            },
+                let operand_1 = inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                let operand_2 = inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                Box::new(move || {
+                    out_hashmap.insert(self.clone(), Some(server_key.or(&operand_1, &operand_2)));
+                })
+            }
             BooleanExpr::Xor(op_1, op_2) => {
-                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.xor(&operand_1, &operand_2)));})
-            },
+                let operand_1 = inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                let operand_2 = inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                Box::new(move || {
+                    out_hashmap.insert(self.clone(), Some(server_key.xor(&operand_1, &operand_2)));
+                })
+            }
             BooleanExpr::Mux(mux, op_1, op_2) => {
-                let mux_ = operands.get(mux).expect("Mux not in hashmap").value().clone();
-                let operand_1 = inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                let operand_2 = inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value().as_ref().expect("Value should exist").clone();
-                Box::new(move || {out_hashmap.insert(self.clone(), Some(server_key.mux(&mux_, &operand_1, &operand_2)));})
-            },
+                let mux_ = operands
+                    .get(mux)
+                    .expect("Mux not in hashmap")
+                    .value()
+                    .clone();
+                let operand_1 = inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                let operand_2 = inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value()
+                    .as_ref()
+                    .expect("Value should exist")
+                    .clone();
+                Box::new(move || {
+                    out_hashmap.insert(
+                        self.clone(),
+                        Some(server_key.mux(&mux_, &operand_1, &operand_2)),
+                    );
+                })
+            }
         }
-
     }
 
     #[inline(always)]
@@ -356,30 +411,55 @@ impl BooleanExpr {
         operands: Arc<DashMap<Operand, Ciphertext>>,
         inc_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,
     ) -> Ciphertext {
-
         match self {
-            BooleanExpr::Operand(op) => operands.get(op).expect("Operand not in hashmap").value().clone(),
+            BooleanExpr::Operand(op) => operands
+                .get(op)
+                .expect("Operand not in hashmap")
+                .value()
+                .clone(),
             BooleanExpr::And(op_1, op_2) => server_key.and(
-                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
-                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+                inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value(),
+                inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value(),
             ),
             BooleanExpr::Or(op_1, op_2) => server_key.or(
-                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
-                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+                inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value(),
+                inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value(),
             ),
             BooleanExpr::Xor(op_1, op_2) => server_key.xor(
-                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
-                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+                inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value(),
+                inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value(),
             ),
             BooleanExpr::Mux(mux, op_1, op_2) => server_key.mux(
                 operands.get(mux).expect("Mux not in hashmap").value(),
-                inc_hashmap.get(op_1).expect("Operand 1 not in hashmap").value(),
-                inc_hashmap.get(op_2).expect("Operand 2 not in hashmap").value(),
+                inc_hashmap
+                    .get(op_1)
+                    .expect("Operand 1 not in hashmap")
+                    .value(),
+                inc_hashmap
+                    .get(op_2)
+                    .expect("Operand 2 not in hashmap")
+                    .value(),
             ),
         }
-
     }
-
 }
 
 impl From<bool> for BooleanExpr {
@@ -438,7 +518,7 @@ impl Ord for BooleanExpr {
                         .cmp(op2)
                         .then_with(|| lhs1.cmp(lhs2))
                         .then_with(|| rhs1.cmp(rhs2)),
-                    _ => Ordering::Equal, 
+                    _ => Ordering::Equal,
                 }
             }
             other_ordering => other_ordering,
@@ -485,38 +565,44 @@ impl Hash for BooleanExpr {
     }
 }
 
-
 pub struct Runnable {
     bool_expr: BooleanExpr,
     operands: Vec<Ciphertext>,
 }
 
 impl Runnable {
-    pub fn new(operands_: &HashMap<Operand, Ciphertext>, hashmap: &HashMap<BooleanExpr, Ciphertext>, bool_expr: BooleanExpr) -> Self {
+    pub fn new(
+        operands_: &HashMap<Operand, Ciphertext>,
+        hashmap: &HashMap<BooleanExpr, Ciphertext>,
+        bool_expr: BooleanExpr,
+    ) -> Self {
         let mut operands: Vec<_> = Vec::with_capacity(3);
 
         match &bool_expr {
-            BooleanExpr::Operand(op) => {operands.push(operands_.get(&op).unwrap().clone())}
+            BooleanExpr::Operand(op) => operands.push(operands_.get(&op).unwrap().clone()),
             BooleanExpr::And(op1, op2) => {
                 operands.push(hashmap.get(&op1).unwrap().clone());
                 operands.push(hashmap.get(&op2).unwrap().clone());
-            },
-            BooleanExpr::Or(op1, op2) =>  {
+            }
+            BooleanExpr::Or(op1, op2) => {
                 operands.push(hashmap.get(&op1).unwrap().clone());
                 operands.push(hashmap.get(&op2).unwrap().clone());
-            },
-            BooleanExpr::Xor(op1, op2) =>  {
+            }
+            BooleanExpr::Xor(op1, op2) => {
                 operands.push(hashmap.get(&op1).unwrap().clone());
                 operands.push(hashmap.get(&op2).unwrap().clone());
-            },
+            }
             BooleanExpr::Mux(mux, op1, op2) => {
                 operands.push(operands_.get(&mux).unwrap().clone());
                 operands.push(hashmap.get(&op1).unwrap().clone());
                 operands.push(hashmap.get(&op2).unwrap().clone());
-            },
+            }
         };
 
-        Self {bool_expr, operands: operands.try_into().unwrap()}
+        Self {
+            bool_expr,
+            operands: operands.try_into().unwrap(),
+        }
     }
     pub fn run(&self, server_key: &ServerKey) -> Ciphertext {
         match self.bool_expr {
@@ -524,7 +610,9 @@ impl Runnable {
             BooleanExpr::And(_, _) => server_key.and(&self.operands[0], &self.operands[1]),
             BooleanExpr::Or(_, _) => server_key.or(&self.operands[0], &self.operands[1]),
             BooleanExpr::Xor(_, _) => server_key.xor(&self.operands[0], &self.operands[1]),
-            BooleanExpr::Mux(_, _, _) => server_key.mux(&self.operands[0], &self.operands[1], &self.operands[2]),
+            BooleanExpr::Mux(_, _, _) => {
+                server_key.mux(&self.operands[0], &self.operands[1], &self.operands[2])
+            }
         }
     }
 }
@@ -535,8 +623,8 @@ pub mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use tfhe::boolean::gen_keys;
     use rayon::prelude::*;
+    use tfhe::boolean::gen_keys;
 
     pub fn bool_to_ciphertext(booleans: &[bool], client_key: &ClientKey) -> Vec<Ciphertext> {
         booleans.iter().map(|&x| client_key.encrypt(x)).collect()
@@ -664,8 +752,7 @@ pub mod tests {
 
         let expr = BooleanExpr::from_bool_vec(&vec![true]);
         let result_expr = BooleanExpr::reduce_mux(&expr);
-        let enc_result =
-            result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+        let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
         assert_eq!(client_key.decrypt(&enc_result), true);
     }
@@ -680,8 +767,7 @@ pub mod tests {
 
         let expr = BooleanExpr::from_bool_vec(&vec![false]);
         let result_expr = BooleanExpr::reduce_mux(&expr);
-        let enc_result =
-            result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+        let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
         assert_eq!(client_key.decrypt(&enc_result), false);
     }
@@ -694,8 +780,7 @@ pub mod tests {
 
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
-            let enc_result =
-                result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+            let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), bool_bits[0]);
         }
     }
@@ -708,8 +793,7 @@ pub mod tests {
 
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
-            let enc_result =
-                result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+            let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), !bool_bits[0]);
         }
     }
@@ -722,8 +806,7 @@ pub mod tests {
 
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
-            let enc_result =
-                result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+            let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
             assert_eq!(client_key.decrypt(&enc_result), true);
         }
     }
@@ -737,8 +820,7 @@ pub mod tests {
 
         for bool_bits in generate_bits(8).into_iter() {
             let bits = bool_to_ciphertext(&bool_bits, &client_key);
-            let enc_result =
-                result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+            let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
             let clear_result = clear_mux_eval(&bool_bits, &truth_table);
             assert_eq!(client_key.decrypt(&enc_result), clear_result);
@@ -755,8 +837,7 @@ pub mod tests {
 
             for bool_bits in generate_bits(8).into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result =
-                    result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+                let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -780,8 +861,7 @@ pub mod tests {
 
             for bool_bits in generate_bits(8).into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result =
-                    result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+                let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -807,8 +887,7 @@ pub mod tests {
 
             for bool_bits in generate_bits(8)[128..].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result =
-                    result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+                let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -832,8 +911,7 @@ pub mod tests {
 
             for bool_bits in generate_bits(8)[..1].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
-                let enc_result =
-                    result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+                let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
                 assert_eq!(
@@ -860,8 +938,7 @@ pub mod tests {
             for bool_bits in generate_bits(8)[0..100].into_iter() {
                 let bits = bool_to_ciphertext(&bool_bits, &client_key);
                 let start = Instant::now();
-                let enc_result =
-                    result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
+                let enc_result = result_expr.evaluate(&bits, &server_key, Arc::new(DashMap::new()));
                 total += start.elapsed();
 
                 let clear_result = clear_mux_eval(&bool_bits, &truth_table);
@@ -901,51 +978,212 @@ pub mod tests {
 
         let expr1 = BooleanExpr::Operand(Operand::Bit1);
         let expr2 = BooleanExpr::Operand(Operand::Bit2);
-    
+
         let and_expr = BooleanExpr::And(Box::new(expr1.clone()), Box::new(expr2.clone()));
         let or_expr = BooleanExpr::Or(Box::new(expr1.clone()), Box::new(expr2.clone()));
         let xor_expr = BooleanExpr::Xor(Box::new(expr1.clone()), Box::new(expr2.clone()));
-        let mux_expr_0 = BooleanExpr::Mux(Operand::Bit0, Box::new(expr1.clone()), Box::new(expr2.clone()));
-        let mux_expr_1 = BooleanExpr::Mux(Operand::Bit1, Box::new(expr1.clone()), Box::new(expr2.clone()));
-        let mux_expr_2 = BooleanExpr::Mux(Operand::Bit2, Box::new(expr1.clone()), Box::new(expr2.clone()));
-        let mux_expr_3 = BooleanExpr::Mux(Operand::Bit3, Box::new(expr1.clone()), Box::new(expr2.clone()));
-        let mux_expr_4 = BooleanExpr::Mux(Operand::Bit0, Box::new(expr2.clone()), Box::new(expr1.clone()));
-        let mux_expr_5 = BooleanExpr::Mux(Operand::Bit1, Box::new(expr2.clone()), Box::new(expr1.clone()));
-        let mux_expr_6 = BooleanExpr::Mux(Operand::Bit2, Box::new(expr2.clone()), Box::new(expr1.clone()));
-        let mux_expr_7 = BooleanExpr::Mux(Operand::Bit3, Box::new(expr2.clone()), Box::new(expr1.clone()));
+        let mux_expr_0 = BooleanExpr::Mux(
+            Operand::Bit0,
+            Box::new(expr1.clone()),
+            Box::new(expr2.clone()),
+        );
+        let mux_expr_1 = BooleanExpr::Mux(
+            Operand::Bit1,
+            Box::new(expr1.clone()),
+            Box::new(expr2.clone()),
+        );
+        let mux_expr_2 = BooleanExpr::Mux(
+            Operand::Bit2,
+            Box::new(expr1.clone()),
+            Box::new(expr2.clone()),
+        );
+        let mux_expr_3 = BooleanExpr::Mux(
+            Operand::Bit3,
+            Box::new(expr1.clone()),
+            Box::new(expr2.clone()),
+        );
+        let mux_expr_4 = BooleanExpr::Mux(
+            Operand::Bit0,
+            Box::new(expr2.clone()),
+            Box::new(expr1.clone()),
+        );
+        let mux_expr_5 = BooleanExpr::Mux(
+            Operand::Bit1,
+            Box::new(expr2.clone()),
+            Box::new(expr1.clone()),
+        );
+        let mux_expr_6 = BooleanExpr::Mux(
+            Operand::Bit2,
+            Box::new(expr2.clone()),
+            Box::new(expr1.clone()),
+        );
+        let mux_expr_7 = BooleanExpr::Mux(
+            Operand::Bit3,
+            Box::new(expr2.clone()),
+            Box::new(expr1.clone()),
+        );
 
         let test_suite: [BooleanExpr; 2] = [expr1.clone(), expr2.clone()];
 
         let start = Instant::now();
         let mut hash_map: HashMap<BooleanExpr, Ciphertext> = HashMap::new();
-        hash_map = test_suite.into_iter()
+        hash_map = test_suite
+            .into_iter()
             .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
             .collect::<Vec<_>>()
             .into_par_iter()
-            .map_with(&server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+            .map_with(&server_key, |server_key, (expr, runnable)| {
+                (expr, runnable.run(server_key))
+            })
             .collect::<HashMap<_, _>>();
 
-    
         println!("TIME TAKEN: {:?}", start.elapsed());
 
-
-        let stage_1: [BooleanExpr; 128] = 
-        [
-        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
-        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
-        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(),
-        mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), mux_expr_0.clone(), mux_expr_1.clone(), mux_expr_2.clone(), mux_expr_3.clone(), mux_expr_4.clone(), mux_expr_5.clone(), mux_expr_6.clone(), mux_expr_7.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), or_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), xor_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone(), and_expr.clone()];
+        let stage_1: [BooleanExpr; 128] = [
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            mux_expr_0.clone(),
+            mux_expr_1.clone(),
+            mux_expr_2.clone(),
+            mux_expr_3.clone(),
+            mux_expr_4.clone(),
+            mux_expr_5.clone(),
+            mux_expr_6.clone(),
+            mux_expr_7.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            or_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            xor_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+            and_expr.clone(),
+        ];
 
         let start = Instant::now();
-        let stage_3 = stage_1.into_iter()
+        let stage_3 = stage_1
+            .into_iter()
             .map(|expr| (expr.clone(), Runnable::new(&operands, &hash_map, expr)))
             .collect::<Vec<_>>();
 
         println!("TIME TAKEN: {:?}", start.elapsed());
         let start = Instant::now();
 
-        hash_map = stage_3.into_par_iter()
-            .map_with(&server_key, |server_key, (expr, runnable)| (expr, runnable.run(server_key)))
+        hash_map = stage_3
+            .into_par_iter()
+            .map_with(&server_key, |server_key, (expr, runnable)| {
+                (expr, runnable.run(server_key))
+            })
             .collect::<HashMap<_, _>>();
 
         println!("TIME TAKEN: {:?}", start.elapsed());
@@ -954,7 +1192,6 @@ pub mod tests {
         let decrypt_1 = client_key.decrypt(&bit1);
         let decrypt_2 = client_key.decrypt(&bit2);
         let decrypt_3 = client_key.decrypt(&bit3);
-
 
         // Check if the result is in the out_hashmap
         assert!(hash_map.contains_key(&mux_expr_0));

@@ -39,12 +39,11 @@ pub const INV_S_BOX_DATA: [u8; 256] = [
     0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f,
     0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
     0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
-    0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d
+    0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
 ];
 
 fn bit_x_s_box(data: [u8; 256], position: u8) -> Vec<bool> {
-    data
-        .iter()
+    data.iter()
         .rev()
         .map(|&x| (x & (1 << position)) != 0)
         .collect()
@@ -52,7 +51,7 @@ fn bit_x_s_box(data: [u8; 256], position: u8) -> Vec<bool> {
 
 pub fn generate_reduced_bool_expr(data: [u8; 256]) -> Vec<BooleanExpr> {
     (0..8)
-    .rev()
+        .rev()
         .into_iter()
         .map(|x| bit_x_s_box(data, x))
         .map(|x| BooleanExpr::from_bool_vec(&x))
@@ -80,51 +79,58 @@ pub fn stage_exprs(data: [u8; 256]) -> Vec<HashSet<BooleanExpr>> {
     grouped_by_stage
 }
 
-
 #[cfg(test)]
 
 mod tests {
 
     use super::*;
     use crate::boolean_tree::tests::*;
-    use dashmap::DashMap;
     use core::iter::Iterator;
+    use dashmap::DashMap;
+    use rayon::prelude::*;
     use std::sync::Arc;
     use tfhe::boolean::gen_keys;
-    use rayon::prelude::*;
 
     fn clear_bools_to_u8(bools: &[bool]) -> u8 {
-            bools
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
-                .sum()
+        bools
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &x)| x.then(|| 2_u8.pow(8 - (i + 1) as u32)))
+            .sum()
     }
 
     fn clear_u8_to_bools(x: u8) -> Vec<bool> {
         (0..8)
-        .rev()
-        .into_iter()
-        .map(|i| (x & (1 << i)) != 0)
-        .collect()
+            .rev()
+            .into_iter()
+            .map(|i| (x & (1 << i)) != 0)
+            .collect()
     }
 
     #[test]
     fn test_all_sbox() {
         let x = generate_reduced_bool_expr(S_BOX_DATA);
         let (client_key, server_key) = gen_keys();
-        
+
         (0..=255).into_par_iter().for_each_with(x, |x, test_x| {
             let bool_bits = clear_u8_to_bools(test_x);
-            let mut bits: Vec<_> = bool_to_ciphertext(&bool_bits, &client_key);            let visited = Arc::new(DashMap::new());
+            let mut bits: Vec<_> = bool_to_ciphertext(&bool_bits, &client_key);
+            let visited = Arc::new(DashMap::new());
             bits.reverse();
-            let clear_bools: Vec<_> = x.into_par_iter().map(|bit|
-                client_key.decrypt(&bit.evaluate(&bits, &server_key, Arc::clone(&visited))
-            )).collect();
-    
+            let clear_bools: Vec<_> = x
+                .into_par_iter()
+                .map(|bit| {
+                    client_key.decrypt(&bit.evaluate(&bits, &server_key, Arc::clone(&visited)))
+                })
+                .collect();
+
             let result = clear_bools_to_u8(&clear_bools);
             let expected_result = S_BOX_DATA[test_x as usize];
-            assert_eq!(result, expected_result, "LEFT: {:#b}, RIGHT {:#b}", result, expected_result)
+            assert_eq!(
+                result, expected_result,
+                "LEFT: {:#b}, RIGHT {:#b}",
+                result, expected_result
+            )
         })
     }
 
@@ -132,21 +138,27 @@ mod tests {
     fn test_all_inv_sbox() {
         let x = generate_reduced_bool_expr(INV_S_BOX_DATA);
         let (client_key, server_key) = gen_keys();
-        
+
         (0..=255).into_par_iter().for_each_with(x, |x, test_x| {
             let bool_bits = clear_u8_to_bools(test_x);
             let mut bits: Vec<_> = bool_to_ciphertext(&bool_bits, &client_key);
             let visited = Arc::new(DashMap::new());
-            
+
             bits.reverse();
-            let clear_bools: Vec<_> = x.into_par_iter().map(|bit|
-                client_key.decrypt(&bit.evaluate(&bits, &server_key, Arc::clone(&visited))
-            )).collect();
-    
+            let clear_bools: Vec<_> = x
+                .into_par_iter()
+                .map(|bit| {
+                    client_key.decrypt(&bit.evaluate(&bits, &server_key, Arc::clone(&visited)))
+                })
+                .collect();
+
             let result = clear_bools_to_u8(&clear_bools);
             let expected_result = INV_S_BOX_DATA[test_x as usize];
-            assert_eq!(result, expected_result, "LEFT: {:#b}, RIGHT {:#b}", result, expected_result)
+            assert_eq!(
+                result, expected_result,
+                "LEFT: {:#b}, RIGHT {:#b}",
+                result, expected_result
+            )
         })
     }
-
 }

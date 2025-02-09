@@ -1,13 +1,13 @@
 use std::array;
 use std::time::Instant;
 
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
+use aes::Aes128;
 use base::key_schedule::key_expansion_clear;
 use base::{Key, State};
-use modes::{ecb::ECB, cbc::CBC, ctr::CTR, ofb::OFB};
 use clap::Parser;
 use hex;
-use aes::cipher::{KeyInit, generic_array::GenericArray, BlockEncrypt};
-use aes::Aes128;
+use modes::{cbc::CBC, ctr::CTR, ecb::ECB, ofb::OFB};
 use rand::Rng;
 use tfhe::boolean::gen_keys;
 use tfhe::boolean::prelude::*;
@@ -27,7 +27,7 @@ struct Args {
     #[arg(short = 'x', long = "key-expansion-offline", default_value_t = false)]
     key_expansion_offline: bool,
 
-    #[arg(short, long, default_value = "CTR")]
+    #[arg(short, long, default_value = "ECB")]
     mode: String,
 }
 
@@ -56,20 +56,49 @@ fn main() {
     let mut rng = rand::rng();
     let mut random_test_blocks = Vec::with_capacity(args.number_of_outputs as usize);
     for _ in 0..args.number_of_outputs {
-        let mut block = [0u8; 16]; 
-        rng.fill(&mut block); 
+        let mut block = [0u8; 16];
+        rng.fill(&mut block);
         random_test_blocks.push(block);
     }
 
     let (client_key, server_key) = gen_keys();
 
     match mode {
-        Mode::ECB => test_ecb(&key, &random_test_blocks, key_expansion_offline, &server_key, &client_key),
-        Mode::CBC => test_cbc(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
-        Mode::CTR => test_ctr(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
-        Mode::OFB => test_ofb(&key, &iv, &random_test_blocks, key_expansion_offline, number_of_outputs, &server_key, &client_key),
+        Mode::ECB => test_ecb(
+            &key,
+            &random_test_blocks,
+            key_expansion_offline,
+            &server_key,
+            &client_key,
+        ),
+        Mode::CBC => test_cbc(
+            &key,
+            &iv,
+            &random_test_blocks,
+            key_expansion_offline,
+            number_of_outputs,
+            &server_key,
+            &client_key,
+        ),
+        Mode::CTR => test_ctr(
+            &key,
+            &iv,
+            &random_test_blocks,
+            key_expansion_offline,
+            number_of_outputs,
+            &server_key,
+            &client_key,
+        ),
+        Mode::OFB => test_ofb(
+            &key,
+            &iv,
+            &random_test_blocks,
+            key_expansion_offline,
+            number_of_outputs,
+            &server_key,
+            &client_key,
+        ),
     }
-
 }
 
 fn parse_mode(input: &str) -> Result<Mode, String> {
@@ -84,7 +113,10 @@ fn parse_mode(input: &str) -> Result<Mode, String> {
 
 fn parse_hex_16(hex_str: &str) -> Result<[u8; 16], String> {
     if hex_str.len() != 32 {
-        return Err(format!("Must be 32 hex characters (16 bytes), it is currently {} characters.", hex_str.len()));
+        return Err(format!(
+            "Must be 32 hex characters (16 bytes), it is currently {} characters.",
+            hex_str.len()
+        ));
     }
     let bytes = hex::decode(hex_str).map_err(|_| "Failed to decode hex")?;
     let mut array = [0u8; 16];
@@ -92,8 +124,14 @@ fn parse_hex_16(hex_str: &str) -> Result<[u8; 16], String> {
     Ok(array)
 }
 
-fn test_ecb(key: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, server_key: &ServerKey, client_key: &ClientKey) {
-    println!("Testing ECB mode");
+fn test_ecb(
+    key: &[u8; 16],
+    blocks: &[[u8; 16]],
+    key_expansion_offline: bool,
+    server_key: &ServerKey,
+    client_key: &ClientKey,
+) {
+    println!("---Testing ECB mode---");
 
     let aes_clear = Aes128::new(GenericArray::from_slice(key));
     let mut expected_result = blocks.to_vec();
@@ -103,43 +141,267 @@ fn test_ecb(key: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, se
     }
 
     let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
-    
+
     // ENCRYPTION
-    println!("Encryption");
+    println!("---Begin Encryption---");
     let ecb = ECB::new(&keys);
 
-    let start = Instant::now();
-    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
-    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
+    let mut encrypted_blocks = blocks
+        .iter()
+        .map(|x| State::from_u8_enc(x, client_key))
+        .collect::<Vec<_>>(); // Convert into State Matrixes and encrypt with FHE
 
     let start = Instant::now();
-    encrypted_blocks.iter_mut().for_each(|x| ecb.encrypt(x, server_key)); // Encrypt with AES
-    println!("Encryption Time Taken: {:?}", start.elapsed());
+    encrypted_blocks
+        .iter_mut()
+        .for_each(|x| ecb.encrypt(x, server_key)); // Encrypt with AES
+    println!(
+        "AES of #{:?} outputs computed in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
 
     assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
         expected_result
     );
 
     // DECRYPTION
-    println!("Decryption");
+    println!("---Decryption---");
 
     let start = Instant::now();
-    encrypted_blocks.iter_mut().for_each(|x| ecb.decrypt(x, server_key)); // Decrypt with AES
-    println!("Decryption Time Taken: {:?}", start.elapsed());
+    encrypted_blocks
+        .iter_mut()
+        .for_each(|x| ecb.decrypt(x, server_key)); // Decrypt with AES
+    println!(
+        "AES of #{:?} outputs decrypted in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
 
     assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
         blocks.to_vec()
     );
 
     println!("ECB mode test passed");
 }
 
-fn key_expansion(key: &[u8; 16], key_expansion_offline: bool, server_key: &ServerKey, client_key: &ClientKey) -> [Key; 11] {
+fn test_cbc(
+    key: &[u8; 16],
+    iv: &[u8; 16],
+    blocks: &[[u8; 16]],
+    key_expansion_offline: bool,
+    number_of_outputs: u8,
+    server_key: &ServerKey,
+    client_key: &ClientKey,
+) {
+    println!("Testing CBC mode");
+
+    let expected_result = cbc_encrypt_clear(blocks, key, iv);
+
+    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
+    let iv = State::from_u8_enc(iv, client_key);
+    // ENCRYPTION
+    println!("---Begin Encryption---");
+    let cbc: CBC = CBC::new(&keys, &iv, number_of_outputs);
+
+    let start = Instant::now();
+    let mut encrypted_blocks = blocks
+        .iter()
+        .map(|x| State::from_u8_enc(x, client_key))
+        .collect::<Vec<_>>(); // Convert into State Matrixes and encrypt with FHE
+    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
+
+    let start = Instant::now();
+    cbc.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
+    println!(
+        "AES of #{:?} outputs computed in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        expected_result
+    );
+
+    // DECRYPTION
+    println!("---Decryption---");
+
+    let start = Instant::now();
+    cbc.decrypt(&mut encrypted_blocks, server_key); // Decrypt with AES
+    println!(
+        "AES of #{:?} outputs decrypted in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        blocks.to_vec()
+    );
+
+    println!("CBC mode test passed");
+}
+
+fn test_ctr(
+    key: &[u8; 16],
+    iv: &[u8; 16],
+    blocks: &[[u8; 16]],
+    key_expansion_offline: bool,
+    number_of_outputs: u8,
+    server_key: &ServerKey,
+    client_key: &ClientKey,
+) {
+    println!("Testing CTR mode");
+    let counters = generate_counters(iv, number_of_outputs);
+    let expected_result = ctr_encrypt_clear(blocks, key, &counters);
+
+    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
+
+    // ENCRYPTION
+    println!("---Begin Encryption---");
+    let encrypted_counters = counters
+        .iter()
+        .map(|x| State::from_u8_enc(x, client_key))
+        .collect::<Vec<_>>(); // Convert into State Matrixes and encrypt with FHE
+    let ctr = CTR::new(&keys, &encrypted_counters, number_of_outputs);
+
+    let mut encrypted_blocks = blocks
+        .iter()
+        .map(|x| State::from_u8_enc(x, client_key))
+        .collect::<Vec<_>>(); // Convert into State Matrixes and encrypt with FHE
+
+    let start = Instant::now();
+    ctr.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
+    println!(
+        "AES of #{:?} outputs computed in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        expected_result
+    );
+
+    // DECRYPTION
+    println!("---Decryption---");
+
+    let start = Instant::now();
+    ctr.decrypt(&mut encrypted_blocks, server_key); // Decrypt with AES
+    println!(
+        "AES of #{:?} outputs decrypted in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        blocks.to_vec()
+    );
+
+    println!("CTR mode test passed");
+}
+
+fn test_ofb(
+    key: &[u8; 16],
+    iv: &[u8; 16],
+    blocks: &[[u8; 16]],
+    key_expansion_offline: bool,
+    number_of_outputs: u8,
+    server_key: &ServerKey,
+    client_key: &ClientKey,
+) {
+    println!("Testing OFB mode");
+
+    let expected_result = ofb_encrypt_clear(blocks, key, iv);
+
+    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
+    let iv = State::from_u8_enc(iv, client_key);
+
+    // ENCRYPTION
+    println!("---Begin Encryption---");
+    let ofb = OFB::new(&keys, &iv, number_of_outputs);
+
+    let mut encrypted_blocks = blocks
+        .iter()
+        .map(|x| State::from_u8_enc(x, client_key))
+        .collect::<Vec<_>>(); // Convert into State Matrixes and encrypt with FHE
+
+    let start = Instant::now();
+    ofb.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
+    println!(
+        "AES of #{:?} outputs computed in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        expected_result
+    );
+
+    // DECRYPTION
+    println!("---Decryption---");
+
+    let start = Instant::now();
+    ofb.decrypt(&mut encrypted_blocks, server_key); // Decrypt with AES
+    println!(
+        "AES of #{:?} outputs decrypted in: {:?}",
+        blocks.len(),
+        start.elapsed()
+    );
+
+    assert_eq!(
+        encrypted_blocks
+            .iter()
+            .map(|x| x.decrypt_to_u8(client_key))
+            .collect::<Vec<_>>(),
+        blocks.to_vec()
+    );
+
+    println!("OFB mode test passed");
+}
+
+fn key_expansion(
+    key: &[u8; 16],
+    key_expansion_offline: bool,
+    server_key: &ServerKey,
+    client_key: &ClientKey,
+) -> [Key; 11] {
     // KEY EXPANSION
-    println!("Key Expansion");
-    
+    println!(
+        "---Key Expansion ({:})---",
+        if key_expansion_offline {
+            "offline"
+        } else {
+            "online"
+        }
+    );
+
     let start = Instant::now();
     let keys: [Key; 11] = if key_expansion_offline {
         let clear_keys = key_expansion_clear(key);
@@ -149,7 +411,7 @@ fn key_expansion(key: &[u8; 16], key_expansion_offline: bool, server_key: &Serve
         curr_key.generate_round_keys(server_key)
     };
 
-    println!("Key Expansion ({:}) Time Taken: {:?}", if key_expansion_offline {"offline"} else {"online"}, start.elapsed());
+    println!("AES key expansion took: {:?}", start.elapsed());
 
     keys
 }
@@ -165,7 +427,7 @@ fn cbc_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], iv: &[u8; 16]) -> Vec<
         for i in 0..16 {
             block[i] ^= prev_cipher[i];
         }
-        
+
         // Encrypt block
         let mut block_arr = GenericArray::from_mut_slice(block);
         aes.encrypt_block(&mut block_arr);
@@ -178,53 +440,10 @@ fn cbc_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], iv: &[u8; 16]) -> Vec<
     ciphertext
 }
 
-
-
-fn test_cbc(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]],  key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
-    println!("Testing CBC mode");
-
-    let expected_result = cbc_encrypt_clear(blocks, key, iv);
-
-
-    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
-    let iv = State::from_u8_enc(iv, client_key);
-    // ENCRYPTION
-    println!("Encryption");
-    let cbc: CBC = CBC::new(&keys, &iv, number_of_outputs);
-
-    let start = Instant::now();
-    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
-    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
-
-    let start = Instant::now();
-    cbc.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
-    println!("Encryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        expected_result
-    );
-
-    // DECRYPTION
-    println!("Decryption");
-
-    let start = Instant::now();
-    cbc.decrypt(&mut encrypted_blocks, server_key);  // Decrypt with AES
-    println!("Decryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        blocks.to_vec()
-    );
-
-    println!("CBC mode test passed");
-}
-
 fn generate_counters(iv: &[u8; 16], number_of_outputs: u8) -> Vec<[u8; 16]> {
     let mut counters = Vec::with_capacity(number_of_outputs as usize);
     let mut counter = iv.clone();
     counter[8..16].fill(0); // Clear the counter part of the IV
-
 
     for _ in 0..number_of_outputs {
         counters.push(counter);
@@ -259,89 +478,6 @@ fn ctr_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], counters: &[[u8; 16]])
     }
 
     result
-}
-
-fn test_ctr(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
-    println!("Testing CTR mode");
-    let counters = generate_counters(iv, number_of_outputs);
-    let expected_result = ctr_encrypt_clear(blocks, key, &counters);
-
-
-
-    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
-
-    // ENCRYPTION
-    println!("Encryption");
-    let encrypted_counters = counters.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE 
-    let ctr = CTR::new(&keys, &encrypted_counters, number_of_outputs);
-
-    let start = Instant::now();
-    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
-    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
-
-    let start = Instant::now();
-    ctr.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
-    println!("Encryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        expected_result
-    );
-
-    // DECRYPTION
-    println!("Decryption");
-
-    let start = Instant::now();
-    ctr.decrypt(&mut encrypted_blocks, server_key);  // Decrypt with AES
-    println!("Decryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        blocks.to_vec()
-    );
-
-    println!("CTR mode test passed");
-}
-
-
-fn test_ofb(key: &[u8; 16], iv: &[u8; 16], blocks: &[[u8; 16]], key_expansion_offline: bool, number_of_outputs: u8, server_key: &ServerKey, client_key: &ClientKey) {
-    println!("Testing OFB mode");
-
-    let expected_result = ofb_encrypt_clear(blocks, key, iv);
-
-    let keys = key_expansion(key, key_expansion_offline, server_key, client_key);
-    let iv = State::from_u8_enc(iv, client_key);
-
-    // ENCRYPTION
-    println!("Encryption");
-    let ofb = OFB::new(&keys, &iv, number_of_outputs);
-
-    let start = Instant::now();
-    let mut encrypted_blocks = blocks.iter().map(|x| State::from_u8_enc(x, client_key)).collect::<Vec<_>>();    // Convert into State Matrixes and encrypt with FHE
-    println!("Conversion to FHE Time Taken: {:?}", start.elapsed());
-
-    let start = Instant::now();
-    ofb.encrypt(&mut encrypted_blocks, server_key); // Encrypt with AES
-    println!("Encryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        expected_result
-    );
-
-    // DECRYPTION
-    println!("Decryption");
-
-    let start = Instant::now();
-    ofb.decrypt(&mut encrypted_blocks, server_key);  // Decrypt with AES
-    println!("Decryption Time Taken: {:?}", start.elapsed());
-
-    assert_eq!(
-        encrypted_blocks.iter().map(|x| x.decrypt_to_u8(client_key)).collect::<Vec<_>>(),
-        blocks.to_vec()
-    );
-
-    println!("OFB mode test passed");
 }
 
 fn ofb_encrypt_clear(blocks: &[[u8; 16]], key: &[u8; 16], iv: &[u8; 16]) -> Vec<[u8; 16]> {
