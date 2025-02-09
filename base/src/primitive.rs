@@ -414,6 +414,7 @@ mod tests {
 
         res
     }
+    
     #[test]
     fn test_mul_gf_2() {
         let (client_key, server_key) = gen_keys();
