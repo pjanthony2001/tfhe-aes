@@ -48,9 +48,12 @@ fn main() {
     println!("Parsed IV: {:?}", iv);
 
     let mut rng = rand::thread_rng();
-    let random_blocks: Vec<[u8; 16]> = (0..args.number_of_outputs)
-        .map(|_| rng.gen::<[u8; 16]>())
-        .collect();
+    let mut random_blocks = Vec::with_capacity(args.number_of_outputs as usize);
+    for _ in 0..args.number_of_outputs {
+        let mut block = [0u8; 16]; 
+        rng.fill(&mut block); 
+        random_blocks.push(block);
+    }
 
     let plaintext = *b"hello world! this is my plaintext.";
     let mode = parse_mode(&args.mode);
