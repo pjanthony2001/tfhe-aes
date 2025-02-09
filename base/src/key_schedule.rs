@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 
 use crate::primitive::*;
+use crate::sbox::*; 
 
 const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
 
@@ -163,6 +164,43 @@ impl Key {
     }
 }
 
+fn sub_word(word: &[u8; 4]) -> [u8; 4] {
+    word.map(|x| S_BOX_DATA[x as usize])
+}
+
+fn rot_word(word: &[u8; 4]) -> [u8; 4] {
+    [word[1], word[2], word[3], word[0]]
+}
+
+pub fn key_expansion_clear(key: &[u8; 16]) -> [[u8; 16]; 11] {
+    let mut round_keys = [[0u8; 16]; 11];
+
+    // Round 0 Key (original key)
+    round_keys[0] = *key;
+
+    for round in 1..=10 {
+        let mut temp = [
+            round_keys[round - 1][12],
+            round_keys[round - 1][13],
+            round_keys[round - 1][14],
+            round_keys[round - 1][15],
+        ];
+
+        temp = sub_word(&rot_word(&temp));
+        temp[0] ^= RCON[round - 1];
+
+        for i in 0..4 {
+            round_keys[round][i] = round_keys[round - 1][i] ^ temp[i];
+        }
+
+        for i in 4..16 {
+            round_keys[round][i] = round_keys[round - 1][i] ^ round_keys[round][i - 4];
+        }
+    }
+
+    round_keys
+}
+
 
 #[cfg(test)]
 
@@ -188,5 +226,15 @@ mod tests {
 
         println!("TIME TAKEN {:?}", start.elapsed() / 1);
 
+    }
+
+    #[test]
+    fn test_key_expansion() {
+        let key = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
+        let round_keys = key_expansion_clear(&key);
+
+        for key in round_keys.iter() {
+            println!("{:#x?}", key);
+        }
     }
 }

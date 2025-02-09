@@ -13,7 +13,7 @@ impl ECB {
         ECB { keys: keys.to_vec() }
     }
 
-    pub fn encrypt(&mut self, state: &mut State, server_key: &ServerKey) {
+    pub fn encrypt(&self, state: &mut State, server_key: &ServerKey) {
         // Initial round key addition
         state.xor_key_enc(&self.keys[0], server_key);
 
@@ -42,7 +42,7 @@ impl ECB {
         state.xor_key_enc(&self.keys[10], server_key);
     }
 
-    pub fn decrypt(&mut self, state: &mut State, server_key: &ServerKey) {
+    pub fn decrypt(&self, state: &mut State, server_key: &ServerKey) {
         // Initial round key addition
         state.xor_key_enc(&self.keys[10], server_key);
 
@@ -72,12 +72,10 @@ impl ECB {
 #[cfg(test)]
 
 mod tests {
-    use std::{time::Instant};
 
     use super::*;
     use tfhe::boolean::gen_keys;
     use base::primitive::*;
-    use rayon::prelude::*;
 
     #[test]
     fn test_ecb() {
@@ -89,7 +87,7 @@ mod tests {
         let keys: Vec<_> = curr_key.generate_round_keys(&server_key).to_vec();  
         let mut state = State::from_u128_enc(0x3243f6a8_885a308d_313198a2_e0370734, &client_key); 
 
-        let mut ecb = ECB::new(&keys);
+        let ecb = ECB::new(&keys);
 
         let start = Instant::now();
         with_server_key(|server_key| {
@@ -110,4 +108,33 @@ mod tests {
         assert_eq!(state.decrypt_to_u128(&client_key), 0x3243f6a8_885a308d_313198a2_e0370734)
 
     }
+
+    #[test]
+    fn test_ecb_twice() {
+        let (client_key, server_key) = gen_keys();
+        set_server_key(&server_key);
+
+
+        let curr_key = Key::from_u128_enc(0x2b7e1516_28aed2a6a_bf71588_09cf4f3c , &client_key);
+        let keys: Vec<_> = curr_key.generate_round_keys(&server_key).to_vec();  
+        let mut state = State::from_u128_enc(0x3243f6a8_885a308d_313198a2_e0370734, &client_key); 
+        let mut state_1 = state.clone();
+
+        let ecb = ECB::new(&keys);
+
+        with_server_key(|server_key| {
+            ecb
+            .encrypt(&mut state, &server_key);  
+        });
+
+        with_server_key(|server_key| {
+            ecb
+            .encrypt(&mut state_1, &server_key);  
+        });
+
+        
+        assert_eq!(state.decrypt_to_u128(&client_key), state_1.decrypt_to_u128(&client_key))
+
+    }
+
 }

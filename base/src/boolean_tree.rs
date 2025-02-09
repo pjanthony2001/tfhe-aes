@@ -316,18 +316,6 @@ impl BooleanExpr {
             },
         }
     }
-
-    // pub fn evaluate_hashset(
-    //     hashset: &HashSet<BooleanExpr>,
-    //     server_key: &ServerKey,
-    //     operands: Arc<DashMap<Operand, Ciphertext>>,
-    //     inc_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,    
-    //     out_hashmap: Arc<DashMap<BooleanExpr, Ciphertext>>,
-    // ) {
-    //     hashset.par_iter().for_each_with(server_key, |server_key, expr| { expr.evaluate_stage(server_key, operands.clone(), inc_hashmap.clone(), out_hashmap.clone()); });
-
-    // }
-
     
     
     #[inline(always)]

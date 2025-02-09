@@ -1,45 +1,39 @@
 use base::*;
+use rayon::prelude::*;
 use tfhe::boolean::prelude::*;
 use crate::ecb::ECB;  
 
 
-/// CBC mode is counter mode for AES-128
+/// CTR mode is the counter mode for AES-128
 /// 
-/// 
-/// 
-/// 
+/// As there is no way to randomly generate the counter in the FHE context, we have to pass it as an argument.
+/// As such, we generate the counters, encrypt, and then pass them to the CTR. 
 
 
-pub struct OFB {
+pub struct CTR {
     ecb: ECB,
-    iv: State,
+    counters: Vec<State>,
     n: u8
 }
 
-impl OFB {
-    pub fn new(keys: &[Key], iv: &State, n: u8) -> Self {
-        OFB { ecb: ECB::new(keys), iv: iv.clone(), n }
+impl CTR {
+    pub fn new(keys: &[Key], counters: &[State], n: u8) -> Self {
+        CTR { ecb: ECB::new(keys), counters: counters.to_vec(), n }
     }
 
     pub fn encrypt(&self, plaintext: &mut [State], server_key: &ServerKey) {
-        let mut curr_state = self.iv.clone();
-
-        for i in 0..self.n {
-            self.ecb.encrypt(&mut curr_state, server_key);
-            plaintext[i as usize].xor_state(&curr_state, server_key);
-        }   
+        let mut enc_counters = self.counters.to_vec();
+        enc_counters.par_iter_mut().for_each(|x| self.ecb.encrypt(x, server_key));
+        plaintext.par_iter_mut().zip(enc_counters.par_iter()).for_each_with(server_key, |server_key, (x, y)| x.xor_state(y, server_key));
     }
 
     pub fn decrypt(&self, ciphertexts: &mut [State], server_key: &ServerKey) {
-        let mut curr_state = self.iv.clone();
-
-        for i in 0..self.n {
-            self.ecb.encrypt(&mut curr_state, server_key);
-            ciphertexts[i as usize].xor_state(&curr_state, server_key);
-        }   
-
+        let mut enc_counters = self.counters.to_vec();
+        enc_counters.par_iter_mut().for_each(|x| self.ecb.encrypt(x, server_key));
+        ciphertexts.par_iter_mut().zip(enc_counters.par_iter()).for_each_with(server_key, |server_key, (x, y)| x.xor_state(y, server_key));
     }
 }
+
 
 
 #[cfg(test)]
@@ -52,15 +46,15 @@ mod tests {
     use base::primitive::*;
 
     #[test]
-    fn test_ofb() {
+    fn test_ctr() {
         let (client_key, server_key) = gen_keys();
         set_server_key(&server_key);
 
 
         let curr_key = Key::from_u128_enc(0x2b7e1516_28aed2a6a_bf71588_09cf4f3c , &client_key);
         let keys = curr_key.generate_round_keys(&server_key);
-        let iv = State::from_u128_enc(0x3243f6a8_885a308d_313198a2_e0312122, &client_key);
-        let ofb = OFB::new(&keys, &iv, 2);
+        let counters = vec![State::from_u128_enc(0x3243f6a8_885a308d_00000000_00000000, &client_key), State::from_u128_enc(0x3243f6a8_885a308d_00000000_00000001, &client_key)];
+        let ctr = CTR::new(&keys, &counters, 2);
 
         let plaintext_block_0 = State::from_u128_enc(0x3243f6a8_885a308d_313198a2_e0370734, &client_key); 
         let plaintext_block_1 = State::from_u128_enc(0x3243f6a8_885a308d_313198a2_e0372324, &client_key); 
@@ -69,13 +63,13 @@ mod tests {
 
         let start = Instant::now();
         with_server_key(|server_key| {
-            ofb.encrypt(&mut plaintext, &server_key);  
+            ctr.encrypt(&mut plaintext, &server_key);  
         });
         println!("ENCRYPT TIME TAKEN {:?}", start.elapsed());
 
         let start = Instant::now();
         with_server_key(|server_key| {
-            ofb.decrypt(&mut plaintext, &server_key);
+            ctr.decrypt(&mut plaintext, &server_key);
         });
         println!("DECRYPT TIME TAKEN {:?}", start.elapsed());
         
@@ -84,4 +78,3 @@ mod tests {
 
     }
 }
-
